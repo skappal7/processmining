@@ -66,6 +66,13 @@ def root_cause_analysis(df):
     st.subheader("Root Cause Analysis")
     st.write(causes)
 
+# Function for variant analysis
+def variant_analysis(df):
+    df['path'] = df.groupby('case_id')['activity'].transform(lambda x: ' -> '.join(x))
+    variants = df['path'].value_counts()
+    st.subheader("Variant Analysis")
+    st.write(variants)
+
 # Main App
 st.title("Process Mining App for Call Centers")
 
@@ -93,13 +100,13 @@ if uploaded_file:
         performance_analysis(data)
 
         # Conformance Checking
-        # Define an expected model
+        # Define an expected model based on actual activities
         expected_model = nx.DiGraph()
         expected_model.add_edges_from([
-            ("Start", "Activity A"),
-            ("Activity A", "End"),
-            ("Start", "Activity B"),
-            ("Activity B", "End")
+            ("Call Received", "Call Transferred"),
+            ("Call Transferred", "Call Handled"),
+            ("Call Handled", "Information Provided"),
+            ("Information Provided", "Call Ended"),
         ])
         conformance_checking(data, expected_model)
 
@@ -108,3 +115,6 @@ if uploaded_file:
 
         # Root Cause Analysis
         root_cause_analysis(data)
+
+        # Variant Analysis
+        variant_analysis(data)
