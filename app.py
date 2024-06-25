@@ -2,11 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import networkx as nx
+import pm4py
+from pm4py.visualization.petrinet import visualizer as pn_visualizer
+from pm4py.algo.discovery.inductive import algorithm as inductive_miner
+from pm4py.algo.conformance.tokenreplay import algorithm as token_replay
+from pm4py.objects.conversion.log import converter as log_converter
+from pm4py.objects.log.util import dataframe_utils
+from io import BytesIO
 import matplotlib.pyplot as plt
-from io import StringIO, BytesIO
-import datetime
-import random
 
 st.set_page_config(page_title="Process Mining App", layout="wide")
 
@@ -20,65 +23,10 @@ def load_data(uploaded_file):
         st.error("Unsupported file type. Please upload a CSV or Excel file.")
         return None
 
-# Function to generate process model
-def generate_process_model(df):
-    df['start_time'] = pd.to_datetime(df['start_time'])
-    df['end_time'] = pd.to_datetime(df['end_time'])
-    df.sort_values(by=['start_time'], inplace=True)
-    events = df[['case_id', 'activity', 'start_time']].values
-    G = nx.DiGraph()
-    for i in range(len(events) - 1):
-        if events[i][0] == events[i + 1][0]:  # same case_id
-            G.add_edge(events[i][1], events[i + 1][1])
-    return G
-
-# Function to display process model
-def display_process_model(G):
-    pos = nx.spring_layout(G)
-    plt.figure(figsize=(12, 8))
-    nx.draw(G, pos, with_labels=True, node_size=3000, node_color="skyblue", font_size=15, font_weight="bold")
-    st.pyplot(plt)
-
-# Function for performance analysis
-def performance_analysis(df):
-    df['duration'] = (df['end_time'] - df['start_time']).dt.total_seconds()
-    performance_summary = df.groupby('activity')['duration'].describe()
-    st.subheader("Performance Analysis")
-    st.write("This section shows the performance analysis, providing descriptive statistics for the duration of each activity.")
-    st.write(performance_summary)
-
-# Function for conformance checking
-def conformance_checking(df, expected_model):
-    actual_model = generate_process_model(df)
-    differences = list(set(expected_model.edges()) - set(actual_model.edges()))
-    st.subheader("Conformance Checking")
-    st.write("This section compares the actual process model with the expected model to identify any deviations.")
-    st.write("Differences between expected and actual process models:")
-    st.write(differences)
-
-# Function for bottleneck identification
-def bottleneck_identification(df):
-    df['duration'] = (df['end_time'] - df['start_time']).dt.total_seconds()
-    bottlenecks = df.groupby('activity')['duration'].mean().sort_values(ascending=False)
-    st.subheader("Bottleneck Identification")
-    st.write("This section identifies bottlenecks by calculating the average duration of each activity and sorting them in descending order.")
-    st.write(bottlenecks)
-
-# Function for root cause analysis
-def root_cause_analysis(df):
-    df['duration'] = (df['end_time'] - df['start_time']).dt.total_seconds()
-    causes = df.groupby('case_id')['duration'].sum().sort_values(ascending=False)
-    st.subheader("Root Cause Analysis")
-    st.write("This section conducts root cause analysis by summing the total duration for each case and identifying cases with the longest durations.")
-    st.write(causes)
-
-# Function for variant analysis
-def variant_analysis(df):
-    df['path'] = df.groupby('case_id')['activity'].transform(lambda x: ' -> '.join(x))
-    variants = df['path'].value_counts()
-    st.subheader("Variant Analysis")
-    st.write("This section shows the variant analysis, displaying the frequency of unique paths taken through the process.")
-    st.write(variants)
+# Function to visualize the Petri net
+def visualize_petri_net(net, initial_marking, final_marking):
+    gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+    return pn_visualizer.view(gviz)
 
 # Main App
 st.title("Process Mining App for Call Centers")
@@ -97,32 +45,50 @@ if uploaded_file:
     if data is not None:
         st.subheader("Uploaded Data")
         st.write(data.head())
+        
+        # Convert the data into an event log
+        data = dataframe_utils.convert_timestamp_columns_in_df(data)
+        log = log_converter.apply(data)
 
-        # Generate and display process model
-        st.subheader("Process Model")
-        st.write("This section shows the process model, which is a graphical representation of the process flow based on the uploaded data.")
-        G = generate_process_model(data)
-        display_process_model(G)
+        # Discover the process model using the Inductive Miner
+        net, initial_marking, final_marking = inductive_miner.apply(log)
+        
+        # Visualize the process model
+        st.subheader("Discovered Process Model (Petri Net)")
+        st.pyplot(visualize_petri_net(net, initial_marking, final_marking))
+        
+        # Conformance Checking using Token-based replay
+        st.subheader("Conformance Checking")
+        replayed_traces = token_replay.apply(log, net, initial_marking, final_marking)
+        st.write("Conformance checking results:")
+        st.write(replayed_traces)
 
         # Performance Analysis
-        performance_analysis(data)
-
-        # Conformance Checking
-        # Define an expected model based on actual activities
-        expected_model = nx.DiGraph()
-        expected_model.add_edges_from([
-            ("Call Received", "Call Transferred"),
-            ("Call Transferred", "Call Handled"),
-            ("Call Handled", "Information Provided"),
-            ("Information Provided", "Call Ended"),
-        ])
-        conformance_checking(data, expected_model)
+        st.subheader("Performance Analysis")
+        performance_df = pm4py.statistics.traces.generic.log_statistics.get_all_trace_variants(log)
+        performance_df = pd.DataFrame.from_dict(performance_df, orient='index').reset_index()
+        performance_df.columns = ['Trace Variant', 'Count']
+        st.write("Trace variants and their counts:")
+        st.write(performance_df)
 
         # Bottleneck Identification
-        bottleneck_identification(data)
+        st.subheader("Bottleneck Identification")
+        bottleneck_df = pm4py.statistics.sojourn_time.log.get_sojourn_time(log)
+        st.write("Sojourn time (time spent) in each activity:")
+        st.write(bottleneck_df)
 
-        # Root Cause Analysis
-        root_cause_analysis(data)
+        # Root Cause Analysis (Simple version: identifying longest running cases)
+        st.subheader("Root Cause Analysis")
+        root_cause_df = data.groupby('case_id').apply(lambda x: (x['end_time'] - x['start_time']).sum()).reset_index()
+        root_cause_df.columns = ['case_id', 'total_duration']
+        root_cause_df = root_cause_df.sort_values(by='total_duration', ascending=False)
+        st.write("Cases with the longest duration:")
+        st.write(root_cause_df.head(10))
 
         # Variant Analysis
-        variant_analysis(data)
+        st.subheader("Variant Analysis")
+        variants_df = pm4py.statistics.traces.generic.log_statistics.get_variant_statistics(log)
+        variants_df = pd.DataFrame(variants_df)
+        st.write("Variants and their frequencies:")
+        st.write(variants_df[['variant', 'count']])
+
