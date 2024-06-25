@@ -3,11 +3,12 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import pm4py
-from pm4py.visualization.petrinet import visualizer as pn_visualizer
-from pm4py.algo.discovery.inductive import algorithm as inductive_miner
-from pm4py.algo.conformance.tokenreplay import algorithm as token_replay
+from pm4py.visualization.petri_net import visualizer as pn_visualizer
+from pm4py.algo.discovery.alpha import algorithm as alpha_miner
 from pm4py.objects.conversion.log import converter as log_converter
 from pm4py.objects.log.util import dataframe_utils
+from pm4py.statistics.traces.generic.log_statistics import get_variant_statistics
+from pm4py.statistics.sojourn_time.log import get as soj_time_get
 from io import BytesIO
 import matplotlib.pyplot as plt
 
@@ -50,30 +51,31 @@ if uploaded_file:
         data = dataframe_utils.convert_timestamp_columns_in_df(data)
         log = log_converter.apply(data)
 
-        # Discover the process model using the Inductive Miner
-        net, initial_marking, final_marking = inductive_miner.apply(log)
+        # Discover the process model using the Alpha Miner
+        net, initial_marking, final_marking = alpha_miner.apply(log)
         
         # Visualize the process model
         st.subheader("Discovered Process Model (Petri Net)")
-        st.pyplot(visualize_petri_net(net, initial_marking, final_marking))
+        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+        pn_visualizer.save(gviz, "petrinet.png")
+        st.image("petrinet.png")
         
         # Conformance Checking using Token-based replay
         st.subheader("Conformance Checking")
-        replayed_traces = token_replay.apply(log, net, initial_marking, final_marking)
+        replayed_traces = pm4py.algo.conformance.tokenreplay.algorithm.apply(log, net, initial_marking, final_marking)
         st.write("Conformance checking results:")
         st.write(replayed_traces)
 
         # Performance Analysis
         st.subheader("Performance Analysis")
-        performance_df = pm4py.statistics.traces.generic.log_statistics.get_all_trace_variants(log)
-        performance_df = pd.DataFrame.from_dict(performance_df, orient='index').reset_index()
-        performance_df.columns = ['Trace Variant', 'Count']
+        performance_df = get_variant_statistics(log)
+        performance_df = pd.DataFrame(performance_df)
         st.write("Trace variants and their counts:")
         st.write(performance_df)
 
         # Bottleneck Identification
         st.subheader("Bottleneck Identification")
-        bottleneck_df = pm4py.statistics.sojourn_time.log.get_sojourn_time(log)
+        bottleneck_df = soj_time_get.get_sojourn_time(log)
         st.write("Sojourn time (time spent) in each activity:")
         st.write(bottleneck_df)
 
@@ -87,8 +89,7 @@ if uploaded_file:
 
         # Variant Analysis
         st.subheader("Variant Analysis")
-        variants_df = pm4py.statistics.traces.generic.log_statistics.get_variant_statistics(log)
+        variants_df = get_variant_statistics(log)
         variants_df = pd.DataFrame(variants_df)
         st.write("Variants and their frequencies:")
         st.write(variants_df[['variant', 'count']])
-
