@@ -5,6 +5,8 @@ import plotly.express as px
 import networkx as nx
 import matplotlib.pyplot as plt
 from io import StringIO, BytesIO
+import datetime
+import random
 
 st.set_page_config(page_title="Process Mining App", layout="wide")
 
@@ -42,6 +44,7 @@ def performance_analysis(df):
     df['duration'] = (df['end_time'] - df['start_time']).dt.total_seconds()
     performance_summary = df.groupby('activity')['duration'].describe()
     st.subheader("Performance Analysis")
+    st.write("This section shows the performance analysis, providing descriptive statistics for the duration of each activity.")
     st.write(performance_summary)
 
 # Function for conformance checking
@@ -49,6 +52,7 @@ def conformance_checking(df, expected_model):
     actual_model = generate_process_model(df)
     differences = list(set(expected_model.edges()) - set(actual_model.edges()))
     st.subheader("Conformance Checking")
+    st.write("This section compares the actual process model with the expected model to identify any deviations.")
     st.write("Differences between expected and actual process models:")
     st.write(differences)
 
@@ -57,6 +61,7 @@ def bottleneck_identification(df):
     df['duration'] = (df['end_time'] - df['start_time']).dt.total_seconds()
     bottlenecks = df.groupby('activity')['duration'].mean().sort_values(ascending=False)
     st.subheader("Bottleneck Identification")
+    st.write("This section identifies bottlenecks by calculating the average duration of each activity and sorting them in descending order.")
     st.write(bottlenecks)
 
 # Function for root cause analysis
@@ -64,6 +69,7 @@ def root_cause_analysis(df):
     df['duration'] = (df['end_time'] - df['start_time']).dt.total_seconds()
     causes = df.groupby('case_id')['duration'].sum().sort_values(ascending=False)
     st.subheader("Root Cause Analysis")
+    st.write("This section conducts root cause analysis by summing the total duration for each case and identifying cases with the longest durations.")
     st.write(causes)
 
 # Function for variant analysis
@@ -71,6 +77,7 @@ def variant_analysis(df):
     df['path'] = df.groupby('case_id')['activity'].transform(lambda x: ' -> '.join(x))
     variants = df['path'].value_counts()
     st.subheader("Variant Analysis")
+    st.write("This section shows the variant analysis, displaying the frequency of unique paths taken through the process.")
     st.write(variants)
 
 # Main App
@@ -93,6 +100,7 @@ if uploaded_file:
 
         # Generate and display process model
         st.subheader("Process Model")
+        st.write("This section shows the process model, which is a graphical representation of the process flow based on the uploaded data.")
         G = generate_process_model(data)
         display_process_model(G)
 
