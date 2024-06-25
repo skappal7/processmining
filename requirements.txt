@@ -5,3 +5,4 @@ plotly
 networkx
 matplotlib
 openpyxl
+pm4py
