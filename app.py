@@ -5,18 +5,13 @@ from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.conversion.log import converter as log_converter
 from pm4py.algo.discovery.inductive import algorithm as inductive_miner
 from pm4py.statistics.traces.generic.log import case_statistics
-from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
-from pm4py.algo.conformance.tokenreplay import algorithm as token_replay
-from pm4py.visualization.graphs import visualizer as graphs_visualizer
-from pm4py.visualization.sna import visualizer as sna_visualizer
-from pm4py.statistics.traces.generic.log import case_arrival
+from pm4py.visualization.petri_net import visualizer as pn_visualizer
 import networkx as nx
 import matplotlib.pyplot as plt
 import io
-import graphviz
 
 # Set page config
-st.set_page_config(page_title="Advanced Process Mining App", layout="wide")
+st.set_page_config(page_title="Process Mining App", layout="wide")
 
 # Custom CSS for styling
 st.markdown("""
@@ -60,11 +55,10 @@ def visualize_process_model(log, algorithm):
             tree = inductive_miner.apply(log)
             net, initial_marking, final_marking = pm4py.convert_to_petri_net(tree)
 
-        gviz = pm4py.visualization.petri_net.visualizer.apply(net, initial_marking, final_marking)
-        return pm4py.visualization.petri_net.visualizer.matplotlib_view(gviz)
-    except Exception as e:
-        st.warning(f"Error in Petri net visualization. Using alternative method. Error: {str(e)}")
         return visualize_using_networkx(net)
+    except Exception as e:
+        st.warning(f"Error in process discovery. Please try a different algorithm or check your data.")
+        return None
 
 def visualize_using_networkx(net):
     G = nx.DiGraph()
@@ -79,46 +73,29 @@ def visualize_using_networkx(net):
     plt.figure(figsize=(12, 8))
     nx.draw(G, pos, with_labels=True, node_color='lightblue', 
             node_size=500, font_size=8, arrows=True)
+    
+    # Draw node labels
     nx.draw_networkx_labels(G, pos)
 
+    # Save the plot to a bytes buffer
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
     return buf
 
 def analyze_process(log):
+    # Variant analysis
     variants_count = case_statistics.get_variant_statistics(log)
     variants_df = pd.DataFrame(variants_count).sort_values("count", ascending=False)
 
+    # Activity frequency
     activities = pm4py.get_event_attribute_values(log, "concept:name")
     activities_df = pd.DataFrame.from_dict(activities, orient='index', columns=['frequency']).sort_values('frequency', ascending=False)
 
-    try:
-        roles = roles_discovery.apply(log)
-        roles_df = pd.DataFrame([(k, ', '.join(v)) for k, v in roles.items()], columns=['Resource', 'Activities'])
-    except Exception as e:
-        st.warning(f"Unable to perform role discovery. Error: {str(e)}")
-        roles_df = None
-
-    return variants_df, activities_df, roles_df
-
-def perform_conformance_checking(log, net, initial_marking, final_marking):
-    replayed_traces = token_replay.apply(log, net, initial_marking, final_marking)
-    fitness = sum(trace['trace_fitness'] for trace in replayed_traces) / len(replayed_traces)
-    return fitness
-
-def create_dotted_chart(log):
-    x, y = case_arrival.get_case_arrival_avg(log)
-    gviz = graphs_visualizer.apply_plot(x, y, variant=graphs_visualizer.Variants.CASES)
-    return graphs_visualizer.matplotlib_view(gviz)
-
-def create_social_network(log):
-    hw_values = pm4py.discover_handover_of_work_network(log)
-    gviz = sna_visualizer.apply(hw_values)
-    return sna_visualizer.matplotlib_view(gviz)
+    return variants_df, activities_df
 
 def main():
-    st.title("Advanced Process Mining App")
+    st.title("Process Mining App")
 
     st.sidebar.title("Controls")
     uploaded_file = st.sidebar.file_uploader("Upload event log (CSV or XES)", type=["csv", "xes"])
@@ -154,40 +131,20 @@ def main():
 
             if st.sidebar.button("Discover Process Model"):
                 with st.spinner("Discovering process model..."):
-                    img = visualize_process_model(log, algorithm)
-                    st.subheader("Process Model")
-                    st.image(img)
+                    img_bytes = visualize_process_model(log, algorithm)
+                    if img_bytes:
+                        st.subheader("Process Model")
+                        st.image(img_bytes)
 
             if st.sidebar.button("Analyze Process"):
                 with st.spinner("Analyzing process..."):
-                    variants_df, activities_df, roles_df = analyze_process(log)
+                    variants_df, activities_df = analyze_process(log)
 
                     st.subheader("Variant Analysis")
                     st.dataframe(variants_df)
 
                     st.subheader("Activity Frequency")
                     st.bar_chart(activities_df['frequency'])
-
-                    if roles_df is not None:
-                        st.subheader("Resource Roles")
-                        st.dataframe(roles_df)
-
-            if st.sidebar.button("Perform Conformance Checking"):
-                with st.spinner("Performing conformance checking..."):
-                    net, initial_marking, final_marking = pm4py.discover_petri_net_inductive(log)
-                    fitness = perform_conformance_checking(log, net, initial_marking, final_marking)
-                    st.subheader("Conformance Checking")
-                    st.write(f"Fitness: {fitness:.2f}")
-
-            if st.sidebar.button("Generate Advanced Visualizations"):
-                with st.spinner("Generating advanced visualizations..."):
-                    st.subheader("Dotted Chart")
-                    dotted_chart = create_dotted_chart(log)
-                    st.image(dotted_chart)
-
-                    st.subheader("Social Network")
-                    social_network = create_social_network(log)
-                    st.image(social_network)
 
             st.sidebar.subheader("Filtering")
             activities = pm4py.get_event_attribute_values(log, "concept:name")
@@ -199,21 +156,18 @@ def main():
 
                 if st.sidebar.button("Apply Filter"):
                     with st.spinner("Applying filter and updating visualizations..."):
-                        img = visualize_process_model(filtered_log, algorithm)
-                        st.subheader("Filtered Process Model")
-                        st.image(img)
+                        img_bytes = visualize_process_model(filtered_log, algorithm)
+                        if img_bytes:
+                            st.subheader("Filtered Process Model")
+                            st.image(img_bytes)
 
-                        variants_df, activities_df, roles_df = analyze_process(filtered_log)
+                        variants_df, activities_df = analyze_process(filtered_log)
                         
                         st.subheader("Filtered Variant Analysis")
                         st.dataframe(variants_df)
 
                         st.subheader("Filtered Activity Frequency")
                         st.bar_chart(activities_df['frequency'])
-
-                        if roles_df is not None:
-                            st.subheader("Filtered Resource Roles")
-                            st.dataframe(roles_df)
 
         else:
             st.warning("Please process the data first by selecting the appropriate columns and clicking 'Process Data'.")
