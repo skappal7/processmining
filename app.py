@@ -1,95 +1,131 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
 import pm4py
-from pm4py.visualization.petri_net import visualizer as pn_visualizer
-from pm4py.algo.discovery.alpha import algorithm as alpha_miner
+from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.conversion.log import converter as log_converter
-from pm4py.objects.log.util import dataframe_utils
-from pm4py.statistics.traces.generic.log_statistics import get_variant_statistics
-from pm4py.statistics.sojourn_time.log import get as soj_time_get
-from io import BytesIO
+from pm4py.algo.discovery.alpha import algorithm as alpha_miner
+from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
+from pm4py.visualization.petri_net import visualizer as pn_visualizer
+from pm4py.algo.filtering.log.attributes import attributes_filter
+from pm4py.statistics.traces.generic.log import case_statistics
+from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
 import matplotlib.pyplot as plt
+import networkx as nx
+import io
 
+# Set page config
 st.set_page_config(page_title="Process Mining App", layout="wide")
 
-# Function to load data
-def load_data(uploaded_file):
-    if uploaded_file.name.endswith('.csv'):
-        return pd.read_csv(uploaded_file)
-    elif uploaded_file.name.endswith('.xlsx'):
-        return pd.read_excel(uploaded_file)
+# Custom CSS for styling
+st.markdown("""
+<style>
+.stButton>button {
+    background-color: #4CAF50;
+    color: white;
+}
+.stSelectbox {
+    color: #4CAF50;
+}
+</style>
+""", unsafe_allow_html=True)
+
+@st.cache(allow_output_mutation=True)
+def load_log(file):
+    if file.name.endswith('.csv'):
+        df = pd.read_csv(file)
+        log = log_converter.apply(df)
+    elif file.name.endswith('.xes'):
+        log = xes_importer.apply(file)
     else:
-        st.error("Unsupported file type. Please upload a CSV or Excel file.")
-        return None
+        raise ValueError("Unsupported file format. Please upload a CSV or XES file.")
+    return log
 
-# Function to visualize the Petri net
-def visualize_petri_net(net, initial_marking, final_marking):
-    gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-    return pn_visualizer.view(gviz)
-
-# Main App
-st.title("Process Mining App for Call Centers")
-
-st.sidebar.header("Upload Data")
-st.sidebar.write("Please upload a CSV or Excel file with the following columns:")
-st.sidebar.write("- case_id: Unique identifier for each call/process instance")
-st.sidebar.write("- activity: Name of the activity or event")
-st.sidebar.write("- start_time: Start time of the activity (format: YYYY-MM-DD HH:MM:SS)")
-st.sidebar.write("- end_time: End time of the activity (format: YYYY-MM-DD HH:MM:SS)")
-
-uploaded_file = st.sidebar.file_uploader("Choose a CSV or Excel file", type=['csv', 'xlsx'])
-
-if uploaded_file:
-    data = load_data(uploaded_file)
-    if data is not None:
-        st.subheader("Uploaded Data")
-        st.write(data.head())
-        
-        # Convert the data into an event log
-        data = dataframe_utils.convert_timestamp_columns_in_df(data)
-        log = log_converter.apply(data)
-
-        # Discover the process model using the Alpha Miner
+def discover_process_model(log, algorithm):
+    if algorithm == "Alpha Miner":
         net, initial_marking, final_marking = alpha_miner.apply(log)
-        
-        # Visualize the process model
-        st.subheader("Discovered Process Model (Petri Net)")
-        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-        pn_visualizer.save(gviz, "petrinet.png")
-        st.image("petrinet.png")
-        
-        # Conformance Checking using Token-based replay
-        st.subheader("Conformance Checking")
-        replayed_traces = pm4py.algo.conformance.tokenreplay.algorithm.apply(log, net, initial_marking, final_marking)
-        st.write("Conformance checking results:")
-        st.write(replayed_traces)
+    elif algorithm == "Heuristics Miner":
+        net, initial_marking, final_marking = heuristics_miner.apply(log)
+    return net, initial_marking, final_marking
 
-        # Performance Analysis
-        st.subheader("Performance Analysis")
-        performance_df = get_variant_statistics(log)
-        performance_df = pd.DataFrame(performance_df)
-        st.write("Trace variants and their counts:")
-        st.write(performance_df)
+def visualize_process_model(net, initial_marking, final_marking):
+    gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+    png = pn_visualizer.save(gviz, "temp.png")
+    with open("temp.png", "rb") as f:
+        return f.read()
 
-        # Bottleneck Identification
-        st.subheader("Bottleneck Identification")
-        bottleneck_df = soj_time_get.get_sojourn_time(log)
-        st.write("Sojourn time (time spent) in each activity:")
-        st.write(bottleneck_df)
+def analyze_process(log):
+    # Variant analysis
+    variants_count = case_statistics.get_variant_statistics(log)
+    variants_df = pd.DataFrame(variants_count).sort_values("count", ascending=False)
 
-        # Root Cause Analysis (Simple version: identifying longest running cases)
-        st.subheader("Root Cause Analysis")
-        root_cause_df = data.groupby('case_id').apply(lambda x: (x['end_time'] - x['start_time']).sum()).reset_index()
-        root_cause_df.columns = ['case_id', 'total_duration']
-        root_cause_df = root_cause_df.sort_values(by='total_duration', ascending=False)
-        st.write("Cases with the longest duration:")
-        st.write(root_cause_df.head(10))
+    # Activity frequency
+    activities = attributes_filter.get_attribute_values(log, "concept:name")
+    activities_df = pd.DataFrame.from_dict(activities, orient='index', columns=['frequency']).sort_values('frequency', ascending=False)
 
-        # Variant Analysis
-        st.subheader("Variant Analysis")
-        variants_df = get_variant_statistics(log)
-        variants_df = pd.DataFrame(variants_df)
-        st.write("Variants and their frequencies:")
-        st.write(variants_df[['variant', 'count']])
+    # Roles discovery
+    roles = roles_discovery.apply(log)
+    roles_df = pd.DataFrame([(k, v) for k, v in roles.items()], columns=['Resource', 'Activities'])
+
+    return variants_df, activities_df, roles_df
+
+def main():
+    st.title("Process Mining App")
+
+    st.sidebar.title("Controls")
+    uploaded_file = st.sidebar.file_uploader("Upload event log (CSV or XES)", type=["csv", "xes"])
+
+    if uploaded_file is not None:
+        log = load_log(uploaded_file)
+
+        st.sidebar.subheader("Process Discovery")
+        algorithm = st.sidebar.selectbox("Select mining algorithm", ["Alpha Miner", "Heuristics Miner"])
+
+        if st.sidebar.button("Discover Process Model"):
+            with st.spinner("Discovering process model..."):
+                net, initial_marking, final_marking = discover_process_model(log, algorithm)
+                st.subheader("Process Model")
+                st.image(visualize_process_model(net, initial_marking, final_marking))
+
+        if st.sidebar.button("Analyze Process"):
+            with st.spinner("Analyzing process..."):
+                variants_df, activities_df, roles_df = analyze_process(log)
+
+                st.subheader("Variant Analysis")
+                st.dataframe(variants_df)
+
+                st.subheader("Activity Frequency")
+                st.bar_chart(activities_df['frequency'])
+
+                st.subheader("Resource Roles")
+                st.dataframe(roles_df)
+
+        st.sidebar.subheader("Filtering")
+        activities = attributes_filter.get_attribute_values(log, "concept:name")
+        selected_activities = st.sidebar.multiselect("Select activities to include", list(activities.keys()))
+
+        if selected_activities:
+            filtered_log = attributes_filter.apply_events(log, selected_activities)
+            st.sidebar.text(f"Filtered log: {len(filtered_log)} traces")
+
+            if st.sidebar.button("Apply Filter"):
+                with st.spinner("Applying filter and updating visualizations..."):
+                    net, initial_marking, final_marking = discover_process_model(filtered_log, algorithm)
+                    st.subheader("Filtered Process Model")
+                    st.image(visualize_process_model(net, initial_marking, final_marking))
+
+                    variants_df, activities_df, roles_df = analyze_process(filtered_log)
+                    
+                    st.subheader("Filtered Variant Analysis")
+                    st.dataframe(variants_df)
+
+                    st.subheader("Filtered Activity Frequency")
+                    st.bar_chart(activities_df['frequency'])
+
+                    st.subheader("Filtered Resource Roles")
+                    st.dataframe(roles_df)
+
+    else:
+        st.info("Please upload a CSV or XES file to begin process mining.")
+
+if __name__ == "__main__":
+    main()
