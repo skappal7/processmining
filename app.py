@@ -3,18 +3,11 @@ import pandas as pd
 import pm4py
 from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.conversion.log import converter as log_converter
-from pm4py.objects.log.util import dataframe_utils
-from pm4py.algo.discovery.alpha import algorithm as alpha_miner
-from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
 from pm4py.visualization.petri_net import visualizer as pn_visualizer
 from pm4py.visualization.process_tree import visualizer as pt_visualizer
-from pm4py.convert import process_tree_to_petri_net
 from pm4py.algo.discovery.inductive import algorithm as inductive_miner
-from pm4py.algo.filtering.log.attributes import attributes_filter
 from pm4py.statistics.traces.generic.log import case_statistics
 from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
-import matplotlib.pyplot as plt
-import networkx as nx
 import io
 
 # Set page config
@@ -33,7 +26,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def load_log(file):
     if file.name.endswith('.csv'):
         df = pd.read_csv(file)
@@ -59,15 +52,14 @@ def visualize_process_model(log, algorithm):
         elif algorithm == "Heuristics Miner":
             net, initial_marking, final_marking = pm4py.discover_petri_net_heuristics(log)
         else:
-            # Fallback to Inductive Miner
             tree = inductive_miner.apply(log)
-            net, initial_marking, final_marking = process_tree_to_petri_net(tree)
+            net, initial_marking, final_marking = pm4py.convert_to_petri_net(tree)
 
         gviz = pn_visualizer.apply(net, initial_marking, final_marking)
         img_bytes = pn_visualizer.save(gviz, "temp.png")
         return img_bytes
     except Exception as e:
-        st.warning(f"Graphviz not available. Using alternative visualization method. Error: {str(e)}")
+        st.warning(f"Error in Petri net visualization. Using alternative visualization method. Error: {str(e)}")
         tree = inductive_miner.apply(log)
         gviz = pt_visualizer.apply(tree)
         img_bytes = pt_visualizer.save(gviz, "temp.png")
@@ -79,7 +71,7 @@ def analyze_process(log):
     variants_df = pd.DataFrame(variants_count).sort_values("count", ascending=False)
 
     # Activity frequency
-    activities = attributes_filter.get_attribute_values(log, "concept:name")
+    activities = pm4py.get_event_attribute_values(log, "concept:name")
     activities_df = pd.DataFrame.from_dict(activities, orient='index', columns=['frequency']).sort_values('frequency', ascending=False)
 
     # Roles discovery
@@ -143,11 +135,11 @@ def main():
                     st.dataframe(roles_df)
 
             st.sidebar.subheader("Filtering")
-            activities = attributes_filter.get_attribute_values(log, "concept:name")
+            activities = pm4py.get_event_attribute_values(log, "concept:name")
             selected_activities = st.sidebar.multiselect("Select activities to include", list(activities.keys()))
 
             if selected_activities:
-                filtered_log = attributes_filter.apply_events(log, selected_activities)
+                filtered_log = pm4py.filter_event_attribute_values(log, "concept:name", selected_activities, level="event")
                 st.sidebar.text(f"Filtered log: {len(filtered_log)} traces")
 
                 if st.sidebar.button("Apply Filter"):
