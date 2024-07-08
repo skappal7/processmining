@@ -3,3 +3,4 @@ pandas
 pm4py
 matplotlib
 networkx
+graphviz
