@@ -5,7 +5,6 @@ from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.conversion.log import converter as log_converter
 from pm4py.algo.discovery.inductive import algorithm as inductive_miner
 from pm4py.statistics.traces.generic.log import case_statistics
-from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
 from pm4py.visualization.petri_net import visualizer as pn_visualizer
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -56,12 +55,10 @@ def visualize_process_model(log, algorithm):
             tree = inductive_miner.apply(log)
             net, initial_marking, final_marking = pm4py.convert_to_petri_net(tree)
 
-        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-        img_bytes = pn_visualizer.save(gviz, "temp.png")
-        return img_bytes
-    except Exception as e:
-        st.warning(f"Error in Petri net visualization. Using alternative visualization method.")
         return visualize_using_networkx(net)
+    except Exception as e:
+        st.warning(f"Error in process discovery. Please try a different algorithm or check your data.")
+        return None
 
 def visualize_using_networkx(net):
     G = nx.DiGraph()
@@ -95,11 +92,7 @@ def analyze_process(log):
     activities = pm4py.get_event_attribute_values(log, "concept:name")
     activities_df = pd.DataFrame.from_dict(activities, orient='index', columns=['frequency']).sort_values('frequency', ascending=False)
 
-    # Roles discovery
-    roles = roles_discovery.apply(log)
-    roles_df = pd.DataFrame([(k, v) for k, v in roles.items()], columns=['Resource', 'Activities'])
-
-    return variants_df, activities_df, roles_df
+    return variants_df, activities_df
 
 def main():
     st.title("Process Mining App")
@@ -139,21 +132,19 @@ def main():
             if st.sidebar.button("Discover Process Model"):
                 with st.spinner("Discovering process model..."):
                     img_bytes = visualize_process_model(log, algorithm)
-                    st.subheader("Process Model")
-                    st.image(img_bytes)
+                    if img_bytes:
+                        st.subheader("Process Model")
+                        st.image(img_bytes)
 
             if st.sidebar.button("Analyze Process"):
                 with st.spinner("Analyzing process..."):
-                    variants_df, activities_df, roles_df = analyze_process(log)
+                    variants_df, activities_df = analyze_process(log)
 
                     st.subheader("Variant Analysis")
                     st.dataframe(variants_df)
 
                     st.subheader("Activity Frequency")
                     st.bar_chart(activities_df['frequency'])
-
-                    st.subheader("Resource Roles")
-                    st.dataframe(roles_df)
 
             st.sidebar.subheader("Filtering")
             activities = pm4py.get_event_attribute_values(log, "concept:name")
@@ -166,10 +157,11 @@ def main():
                 if st.sidebar.button("Apply Filter"):
                     with st.spinner("Applying filter and updating visualizations..."):
                         img_bytes = visualize_process_model(filtered_log, algorithm)
-                        st.subheader("Filtered Process Model")
-                        st.image(img_bytes)
+                        if img_bytes:
+                            st.subheader("Filtered Process Model")
+                            st.image(img_bytes)
 
-                        variants_df, activities_df, roles_df = analyze_process(filtered_log)
+                        variants_df, activities_df = analyze_process(filtered_log)
                         
                         st.subheader("Filtered Variant Analysis")
                         st.dataframe(variants_df)
@@ -177,8 +169,6 @@ def main():
                         st.subheader("Filtered Activity Frequency")
                         st.bar_chart(activities_df['frequency'])
 
-                        st.subheader("Filtered Resource Roles")
-                        st.dataframe(roles_df)
         else:
             st.warning("Please process the data first by selecting the appropriate columns and clicking 'Process Data'.")
 
