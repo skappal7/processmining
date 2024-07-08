@@ -7,6 +7,9 @@ from pm4py.objects.log.util import dataframe_utils
 from pm4py.algo.discovery.alpha import algorithm as alpha_miner
 from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
 from pm4py.visualization.petri_net import visualizer as pn_visualizer
+from pm4py.visualization.process_tree import visualizer as pt_visualizer
+from pm4py.convert import process_tree_to_petri_net
+from pm4py.algo.discovery.inductive import algorithm as inductive_miner
 from pm4py.algo.filtering.log.attributes import attributes_filter
 from pm4py.statistics.traces.generic.log import case_statistics
 from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
@@ -49,18 +52,26 @@ def convert_df_to_event_log(df, case_id, activity, timestamp):
     event_log = log_converter.apply(df)
     return event_log
 
-def discover_process_model(log, algorithm):
-    if algorithm == "Alpha Miner":
-        net, initial_marking, final_marking = alpha_miner.apply(log)
-    elif algorithm == "Heuristics Miner":
-        net, initial_marking, final_marking = heuristics_miner.apply(log)
-    return net, initial_marking, final_marking
+def visualize_process_model(log, algorithm):
+    try:
+        if algorithm == "Alpha Miner":
+            net, initial_marking, final_marking = pm4py.discover_petri_net_alpha(log)
+        elif algorithm == "Heuristics Miner":
+            net, initial_marking, final_marking = pm4py.discover_petri_net_heuristics(log)
+        else:
+            # Fallback to Inductive Miner
+            tree = inductive_miner.apply(log)
+            net, initial_marking, final_marking = process_tree_to_petri_net(tree)
 
-def visualize_process_model(net, initial_marking, final_marking):
-    gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-    png = pn_visualizer.save(gviz, "temp.png")
-    with open("temp.png", "rb") as f:
-        return f.read()
+        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+        img_bytes = pn_visualizer.save(gviz, "temp.png")
+        return img_bytes
+    except Exception as e:
+        st.warning(f"Graphviz not available. Using alternative visualization method. Error: {str(e)}")
+        tree = inductive_miner.apply(log)
+        gviz = pt_visualizer.apply(tree)
+        img_bytes = pt_visualizer.save(gviz, "temp.png")
+        return img_bytes
 
 def analyze_process(log):
     # Variant analysis
@@ -110,13 +121,13 @@ def main():
             log = st.session_state['log']
 
             st.sidebar.subheader("Process Discovery")
-            algorithm = st.sidebar.selectbox("Select mining algorithm", ["Alpha Miner", "Heuristics Miner"])
+            algorithm = st.sidebar.selectbox("Select mining algorithm", ["Alpha Miner", "Heuristics Miner", "Inductive Miner"])
 
             if st.sidebar.button("Discover Process Model"):
                 with st.spinner("Discovering process model..."):
-                    net, initial_marking, final_marking = discover_process_model(log, algorithm)
+                    img_bytes = visualize_process_model(log, algorithm)
                     st.subheader("Process Model")
-                    st.image(visualize_process_model(net, initial_marking, final_marking))
+                    st.image(img_bytes)
 
             if st.sidebar.button("Analyze Process"):
                 with st.spinner("Analyzing process..."):
@@ -141,9 +152,9 @@ def main():
 
                 if st.sidebar.button("Apply Filter"):
                     with st.spinner("Applying filter and updating visualizations..."):
-                        net, initial_marking, final_marking = discover_process_model(filtered_log, algorithm)
+                        img_bytes = visualize_process_model(filtered_log, algorithm)
                         st.subheader("Filtered Process Model")
-                        st.image(visualize_process_model(net, initial_marking, final_marking))
+                        st.image(img_bytes)
 
                         variants_df, activities_df, roles_df = analyze_process(filtered_log)
                         
