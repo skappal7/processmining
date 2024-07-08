@@ -3,6 +3,7 @@ import pandas as pd
 import pm4py
 from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.conversion.log import converter as log_converter
+from pm4py.objects.log.util import dataframe_utils
 from pm4py.algo.discovery.alpha import algorithm as alpha_miner
 from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
 from pm4py.visualization.petri_net import visualizer as pn_visualizer
@@ -33,12 +34,20 @@ st.markdown("""
 def load_log(file):
     if file.name.endswith('.csv'):
         df = pd.read_csv(file)
-        log = log_converter.apply(df)
+        return df
     elif file.name.endswith('.xes'):
         log = xes_importer.apply(file)
+        return log
     else:
         raise ValueError("Unsupported file format. Please upload a CSV or XES file.")
-    return log
+
+def convert_df_to_event_log(df, case_id, activity, timestamp):
+    df = df.rename(columns={case_id: 'case:concept:name', 
+                            activity: 'concept:name', 
+                            timestamp: 'time:timestamp'})
+    df['time:timestamp'] = pd.to_datetime(df['time:timestamp'])
+    event_log = log_converter.apply(df)
+    return event_log
 
 def discover_process_model(log, algorithm):
     if algorithm == "Alpha Miner":
@@ -75,7 +84,21 @@ def main():
     uploaded_file = st.sidebar.file_uploader("Upload event log (CSV or XES)", type=["csv", "xes"])
 
     if uploaded_file is not None:
-        log = load_log(uploaded_file)
+        data = load_log(uploaded_file)
+
+        if isinstance(data, pd.DataFrame):
+            st.sidebar.subheader("Column Selection")
+            case_id = st.sidebar.selectbox("Select case ID column", data.columns)
+            activity = st.sidebar.selectbox("Select activity column", data.columns)
+            timestamp = st.sidebar.selectbox("Select timestamp column", data.columns)
+
+            if st.sidebar.button("Process Data"):
+                with st.spinner("Processing data..."):
+                    log = convert_df_to_event_log(data, case_id, activity, timestamp)
+                    st.success("Data processed successfully!")
+        else:
+            log = data
+            st.success("XES file loaded successfully!")
 
         st.sidebar.subheader("Process Discovery")
         algorithm = st.sidebar.selectbox("Select mining algorithm", ["Alpha Miner", "Heuristics Miner"])
