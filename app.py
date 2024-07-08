@@ -3,11 +3,12 @@ import pandas as pd
 import pm4py
 from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.conversion.log import converter as log_converter
-from pm4py.visualization.petri_net import visualizer as pn_visualizer
-from pm4py.visualization.process_tree import visualizer as pt_visualizer
 from pm4py.algo.discovery.inductive import algorithm as inductive_miner
 from pm4py.statistics.traces.generic.log import case_statistics
 from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
+from pm4py.visualization.petri_net import visualizer as pn_visualizer
+import networkx as nx
+import matplotlib.pyplot as plt
 import io
 
 # Set page config
@@ -59,11 +60,31 @@ def visualize_process_model(log, algorithm):
         img_bytes = pn_visualizer.save(gviz, "temp.png")
         return img_bytes
     except Exception as e:
-        st.warning(f"Error in Petri net visualization. Using alternative visualization method. Error: {str(e)}")
-        tree = inductive_miner.apply(log)
-        gviz = pt_visualizer.apply(tree)
-        img_bytes = pt_visualizer.save(gviz, "temp.png")
-        return img_bytes
+        st.warning(f"Error in Petri net visualization. Using alternative visualization method.")
+        return visualize_using_networkx(net)
+
+def visualize_using_networkx(net):
+    G = nx.DiGraph()
+    for place in net.places:
+        G.add_node(place.name, node_type='place')
+    for transition in net.transitions:
+        G.add_node(transition.name, node_type='transition')
+    for arc in net.arcs:
+        G.add_edge(arc.source.name, arc.target.name)
+
+    pos = nx.spring_layout(G)
+    plt.figure(figsize=(12, 8))
+    nx.draw(G, pos, with_labels=True, node_color='lightblue', 
+            node_size=500, font_size=8, arrows=True)
+    
+    # Draw node labels
+    nx.draw_networkx_labels(G, pos)
+
+    # Save the plot to a bytes buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    return buf
 
 def analyze_process(log):
     # Variant analysis
