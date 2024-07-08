@@ -40,10 +40,12 @@ def load_log(file):
     else:
         raise ValueError("Unsupported file format. Please upload a CSV or XES file.")
 
-def convert_df_to_event_log(df, case_id, activity, timestamp):
+def convert_df_to_event_log(df, case_id, activity, timestamp, resource=None):
     df = df.rename(columns={case_id: 'case:concept:name', 
                             activity: 'concept:name', 
                             timestamp: 'time:timestamp'})
+    if resource:
+        df = df.rename(columns={resource: 'org:resource'})
     df['time:timestamp'] = pd.to_datetime(df['time:timestamp'])
     event_log = log_converter.apply(df)
     return event_log
@@ -125,8 +127,8 @@ def create_social_network(log):
     handover = defaultdict(lambda: defaultdict(int))
     for trace in log:
         for i in range(len(trace) - 1):
-            resource1 = trace[i]['org:resource'] if 'org:resource' in trace[i] else 'Unknown'
-            resource2 = trace[i+1]['org:resource'] if 'org:resource' in trace[i+1] else 'Unknown'
+            resource1 = trace[i].get('org:resource', 'Unknown')
+            resource2 = trace[i+1].get('org:resource', 'Unknown')
             handover[resource1][resource2] += 1
 
     G = nx.DiGraph()
@@ -157,11 +159,13 @@ def main():
             case_id = st.sidebar.selectbox("Select case ID column", data.columns)
             activity = st.sidebar.selectbox("Select activity column", data.columns)
             timestamp = st.sidebar.selectbox("Select timestamp column", data.columns)
+            resource = st.sidebar.selectbox("Select resource column (optional)", ['None'] + list(data.columns))
 
             if st.sidebar.button("Process Data"):
                 with st.spinner("Processing data..."):
                     try:
-                        log = convert_df_to_event_log(data, case_id, activity, timestamp)
+                        resource = resource if resource != 'None' else None
+                        log = convert_df_to_event_log(data, case_id, activity, timestamp, resource)
                         st.session_state['log'] = log
                         st.success("Data processed successfully!")
                     except Exception as e:
