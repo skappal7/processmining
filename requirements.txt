@@ -4,3 +4,4 @@ pm4py
 matplotlib
 networkx
 graphviz
+seaborn
