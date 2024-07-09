@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import networkx as nx
 import graphviz
 from io import StringIO
 
@@ -31,7 +30,7 @@ def create_process_map(df, case_id, activity, resource=None):
              compound='true',
              concentrate='true',
              splines='ortho')
-    
+
     try:
         # Create a subgraph for start activities
         with dot.subgraph(name='cluster_start') as c:
@@ -59,12 +58,12 @@ def create_process_map(df, case_id, activity, resource=None):
             edge_counts = edges.value_counts()
             for (source, target, res), count in edge_counts.items():
                 if pd.notna(target):
-                    dot.edge(str(source), str(target), label=f"{res}\n({count})", penwidth=str(0.5 + count/edge_counts.max()*2))
+                    dot.edge(str(source), str(target), label=f"{res}\n({count})", penwidth=str(0.5 + count/edge_counts.max()*2), fontsize='10', color='gray')
         else:
             edges = df.groupby(case_id)[activity].apply(lambda x: list(zip(x, x[1:]))).explode()
             edge_counts = edges.value_counts()
             for (source, target), count in edge_counts.items():
-                dot.edge(str(source), str(target), label=str(count), penwidth=str(0.5 + count/edge_counts.max()*2))
+                dot.edge(str(source), str(target), label=str(count), penwidth=str(0.5 + count/edge_counts.max()*2), fontsize='10', color='gray')
 
         return dot
     except Exception as e:
@@ -182,54 +181,16 @@ def main():
             try:
                 variant_flow = create_variant_flow(df, case_id, activity)
                 st.plotly_chart(variant_flow, use_container_width=True)
-
-                # Display variant details in a table
-                variants = df.groupby(case_id)[activity].agg(list).value_counts().reset_index()
-                variants.columns = ['Variant', 'Frequency']
-                variants['Variant'] = variants['Variant'].apply(lambda x: ' -> '.join(x))
-                variants = variants.head(20)  # Show top 20 variants
-                st.write("Top 20 Variants Details:")
-                st.table(variants)
             except Exception as e:
-                st.error(f"Error in variant analysis: {str(e)}")
-                st.info("This might occur if there are issues with the case ID or activity columns. Please check your data.")
-
-            # Activity Distribution
-            st.markdown(add_explanation("Activity Distribution", "This chart shows the frequency of each activity in the process."), unsafe_allow_html=True)
-            try:
-                activity_counts = df[activity].value_counts().reset_index()
-                activity_counts.columns = ['Activity', 'Frequency']
-                fig = px.bar(activity_counts, x='Activity', y='Frequency')
-                fig.update_layout(xaxis_title="Activity", yaxis_title="Frequency")
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error generating activity distribution: {str(e)}")
-                st.info("This might occur if there are issues with the activity column. Please check your data.")
+                st.error(f"Error generating variant analysis: {str(e)}")
 
             # Transition Matrix
             st.markdown(add_explanation("Transition Matrix", "The transition matrix shows the frequency of transitions between activities."), unsafe_allow_html=True)
             try:
                 transition_matrix = create_transition_matrix(df, case_id, activity)
-                fig = px.imshow(transition_matrix, labels=dict(x="Next Activity", y="Current Activity", color="Frequency"), 
-                                x=transition_matrix.columns, y=transition_matrix.index)
-                st.plotly_chart(fig, use_container_width=True)
+                st.write(transition_matrix)
             except Exception as e:
-                st.warning(f"Unable to create transition matrix. Error: {str(e)}")
-                st.info("This might occur if there are cases with only one activity or if activities aren't properly paired.")
-
-            # Resource Analysis (if resource column is selected)
-            if resource:
-                st.markdown(add_explanation("Resource Analysis", "This heatmap shows the frequency of activities performed by each resource."), unsafe_allow_html=True)
-                try:
-                    resource_activity = df.groupby(resource)[activity].value_counts().unstack(fill_value=0)
-                    fig = px.imshow(resource_activity, labels=dict(x="Activity", y="Resource", color="Frequency"))
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error in resource analysis: {str(e)}")
-                    st.info("This might occur if there are issues with the resource or activity columns. Please check your data.")
-
-    else:
-        st.info("Please upload a CSV file to begin the analysis.")
+                st.error(f"Error generating transition matrix: {str(e)}")
 
 if __name__ == "__main__":
     main()
