@@ -77,9 +77,10 @@ def create_variant_flow(df, case_id, activity, top_n=20):
 
     variant_data = []
     for i, (variant, count) in enumerate(top_variants.items(), 1):
+        variant_name = f"Variant {i}<br>({' -> '.join(variant)})"
         for j, act in enumerate(variant):
             variant_data.append({
-                'Variant': f'Variant {i}',
+                'Variant': variant_name,
                 'Activity': act,
                 'Position': j,
                 'Count': count
@@ -117,13 +118,13 @@ def create_variant_flow(df, case_id, activity, top_n=20):
 # Function to create transition matrix
 def create_transition_matrix(df, case_id, activity):
     transitions = df.groupby(case_id)[activity].apply(lambda x: list(zip(x, x[1:])))
-    transition_counts = transitions.explode().value_counts().unstack(fill_value=0)
-    return transition_counts
+    transition_counts = transitions.explode().value_counts()
+    transition_matrix = transition_counts.unstack(fill_value=0)
+    return transition_matrix
 
 # Function to add explanation
 def add_explanation(title, explanation):
-    with st.expander(f"ℹ️ {title} Explanation"):
-        st.write(explanation)
+    return f"<span title='{explanation}'>ℹ️ {title}</span>"
 
 # Main function
 def main():
@@ -147,7 +148,7 @@ def main():
             df = correct_datetime(df, timestamp)
 
             # Process Overview
-            st.subheader("Process Overview")
+            st.markdown(add_explanation("Process Overview", "This section provides key metrics about the process."), unsafe_allow_html=True)
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             col1.metric("Tickets", df[case_id].nunique())
             col2.metric("Activities", df[activity].nunique())
@@ -155,34 +156,29 @@ def main():
             col4.metric("Users", df[resource].nunique() if resource else "N/A")
             col5.metric("Products", df['product'].nunique() if 'product' in df.columns else "N/A")
             col6.metric("Variants", df.groupby(case_id)[activity].agg(tuple).nunique())
-            
-            add_explanation("Process Overview", "This section provides key metrics about the process. Tickets represent unique cases, Activities are distinct process steps, Events are total occurrences of activities, Users are distinct resources (if applicable), Products are distinct product types (if applicable), and Variants are unique sequences of activities.")
 
             # Time range
             st.write(f"Time Range: {df[timestamp].min().date()} to {df[timestamp].max().date()}")
 
             # Number of cases per month
-            st.subheader("Number of cases per month by start date")
+            st.markdown(add_explanation("Number of cases per month by start date", "This chart shows the distribution of cases over time."), unsafe_allow_html=True)
             df['month'] = df[timestamp].dt.to_period('M')
             cases_per_month = df.groupby('month')[case_id].nunique().reset_index()
             cases_per_month['month'] = cases_per_month['month'].astype(str)
             fig = px.bar(cases_per_month, x='month', y=case_id, labels={'month': 'Month', case_id: 'Number of Cases'})
             st.plotly_chart(fig, use_container_width=True)
-            
-            add_explanation("Cases per Month", "This chart shows the distribution of cases over time. It helps identify trends, seasonality, or unusual spikes in process instances.")
 
             # Process Map
-            st.subheader("Process Map")
+            st.markdown(add_explanation("Process Map", "The process map visualizes the flow of activities."), unsafe_allow_html=True)
             try:
                 process_map = create_process_map(df, case_id, activity, resource)
                 st.graphviz_chart(process_map)
-                add_explanation("Process Map", "The process map visualizes the flow of activities. Nodes represent activities, while edges show transitions between activities. The thickness of edges indicates frequency of transitions. Start activities are in blue, end activities in pink.")
             except Exception as e:
                 st.error(f"Error generating process map: {str(e)}")
                 st.info("This might occur due to complexities in the process or limitations in the visualization library. Try filtering the data or adjusting the process map parameters.")
 
             # Variant Analysis
-            st.subheader("Variant Analysis")
+            st.markdown(add_explanation("Variant Analysis", "This visualization shows the most common process variants (unique sequences of activities)."), unsafe_allow_html=True)
             try:
                 variant_flow = create_variant_flow(df, case_id, activity)
                 st.plotly_chart(variant_flow, use_container_width=True)
@@ -194,47 +190,40 @@ def main():
                 variants = variants.head(20)  # Show top 20 variants
                 st.write("Top 20 Variants Details:")
                 st.table(variants)
-                
-                add_explanation("Variant Analysis", "This visualization shows the most common process variants (unique sequences of activities). Each row represents a variant, with colored blocks indicating activities. The table below provides detailed frequency information for each variant.")
             except Exception as e:
                 st.error(f"Error in variant analysis: {str(e)}")
                 st.info("This might occur if there are issues with the case ID or activity columns. Please check your data.")
 
             # Activity Distribution
-            st.subheader("Activity Distribution")
+            st.markdown(add_explanation("Activity Distribution", "This chart shows the frequency of each activity in the process."), unsafe_allow_html=True)
             try:
                 activity_counts = df[activity].value_counts().reset_index()
                 activity_counts.columns = ['Activity', 'Frequency']
                 fig = px.bar(activity_counts, x='Activity', y='Frequency')
                 fig.update_layout(xaxis_title="Activity", yaxis_title="Frequency")
                 st.plotly_chart(fig, use_container_width=True)
-                add_explanation("Activity Distribution", "This chart shows the frequency of each activity in the process. It helps identify the most common and least common activities, which can be useful for process optimization.")
             except Exception as e:
                 st.error(f"Error generating activity distribution: {str(e)}")
                 st.info("This might occur if there are issues with the activity column. Please check your data.")
 
             # Transition Matrix
-            st.subheader("Transition Matrix")
+            st.markdown(add_explanation("Transition Matrix", "The transition matrix shows the frequency of transitions between activities."), unsafe_allow_html=True)
             try:
                 transition_matrix = create_transition_matrix(df, case_id, activity)
                 fig = px.imshow(transition_matrix, labels=dict(x="Next Activity", y="Current Activity", color="Frequency"), 
                                 x=transition_matrix.columns, y=transition_matrix.index)
                 st.plotly_chart(fig, use_container_width=True)
-                
-                add_explanation("Transition Matrix", "The transition matrix shows the frequency of transitions between activities. Each cell represents the number of times one activity (row) is followed by another activity (column). Darker colors indicate more frequent transitions.")
-            except ValueError as e:
+            except Exception as e:
                 st.warning(f"Unable to create transition matrix. Error: {str(e)}")
                 st.info("This might occur if there are cases with only one activity or if activities aren't properly paired.")
 
             # Resource Analysis (if resource column is selected)
             if resource:
-                st.subheader("Resource Analysis")
+                st.markdown(add_explanation("Resource Analysis", "This heatmap shows the frequency of activities performed by each resource."), unsafe_allow_html=True)
                 try:
                     resource_activity = df.groupby(resource)[activity].value_counts().unstack(fill_value=0)
                     fig = px.imshow(resource_activity, labels=dict(x="Activity", y="Resource", color="Frequency"))
                     st.plotly_chart(fig, use_container_width=True)
-                    
-                    add_explanation("Resource Analysis", "This heatmap shows the frequency of activities performed by each resource. It helps identify specialization of resources and potential bottlenecks in the process.")
                 except Exception as e:
                     st.error(f"Error in resource analysis: {str(e)}")
                     st.info("This might occur if there are issues with the resource or activity columns. Please check your data.")
