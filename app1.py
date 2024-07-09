@@ -32,40 +32,43 @@ def create_process_map(df, case_id, activity, resource=None):
              concentrate='true',
              splines='ortho')
     
-    # Create a subgraph for start activities
-    with dot.subgraph(name='cluster_start') as c:
-        c.attr(label='Start Activities', style='filled', color='lightgrey')
-        start_activities = df.groupby(case_id)[activity].first().value_counts()
-        for act, count in start_activities.items():
-            c.node(act, f"{act}\n({count})", shape='box', style='filled', fillcolor='lightblue')
+    try:
+        # Create a subgraph for start activities
+        with dot.subgraph(name='cluster_start') as c:
+            c.attr(label='Start Activities', style='filled', color='lightgrey')
+            start_activities = df.groupby(case_id)[activity].first().value_counts()
+            for act, count in start_activities.items():
+                c.node(str(act), f"{act}\n({count})", shape='box', style='filled', fillcolor='lightblue')
 
-    # Create a subgraph for end activities
-    with dot.subgraph(name='cluster_end') as c:
-        c.attr(label='End Activities', style='filled', color='lightgrey')
-        end_activities = df.groupby(case_id)[activity].last().value_counts()
-        for act, count in end_activities.items():
-            c.node(act, f"{act}\n({count})", shape='box', style='filled', fillcolor='lightpink')
+        # Create a subgraph for end activities
+        with dot.subgraph(name='cluster_end') as c:
+            c.attr(label='End Activities', style='filled', color='lightgrey')
+            end_activities = df.groupby(case_id)[activity].last().value_counts()
+            for act, count in end_activities.items():
+                c.node(str(act), f"{act}\n({count})", shape='box', style='filled', fillcolor='lightpink')
 
-    # Add other activities
-    other_activities = set(df[activity].unique()) - set(start_activities.index) - set(end_activities.index)
-    for act in other_activities:
-        count = df[df[activity] == act].shape[0]
-        dot.node(act, f"{act}\n({count})", shape='box')
+        # Add other activities
+        other_activities = set(df[activity].unique()) - set(start_activities.index) - set(end_activities.index)
+        for act in other_activities:
+            count = df[df[activity] == act].shape[0]
+            dot.node(str(act), f"{act}\n({count})", shape='box')
 
-    # Add edges
-    if resource:
-        edges = df.groupby(case_id).apply(lambda x: list(zip(x[activity], x[activity].shift(-1), x[resource]))).explode()
-        edge_counts = edges.value_counts()
-        for (source, target, res), count in edge_counts.items():
-            if pd.notna(target):
-                dot.edge(source, target, label=f"{res}\n({count})", penwidth=str(0.5 + count/edge_counts.max()*2))
-    else:
-        edges = df.groupby(case_id)[activity].apply(lambda x: list(zip(x, x[1:]))).explode()
-        edge_counts = edges.value_counts()
-        for (source, target), count in edge_counts.items():
-            dot.edge(source, target, label=str(count), penwidth=str(0.5 + count/edge_counts.max()*2))
+        # Add edges
+        if resource:
+            edges = df.groupby(case_id).apply(lambda x: list(zip(x[activity], x[activity].shift(-1), x[resource]))).explode()
+            edge_counts = edges.value_counts()
+            for (source, target, res), count in edge_counts.items():
+                if pd.notna(target):
+                    dot.edge(str(source), str(target), label=f"{res}\n({count})", penwidth=str(0.5 + count/edge_counts.max()*2))
+        else:
+            edges = df.groupby(case_id)[activity].apply(lambda x: list(zip(x, x[1:]))).explode()
+            edge_counts = edges.value_counts()
+            for (source, target), count in edge_counts.items():
+                dot.edge(str(source), str(target), label=str(count), penwidth=str(0.5 + count/edge_counts.max()*2))
 
-    return dot
+        return dot
+    except Exception as e:
+        raise ValueError(f"Error in creating process map: {str(e)}")
 
 # Function to create variant flow
 def create_variant_flow(df, case_id, activity, top_n=20):
@@ -170,10 +173,13 @@ def main():
 
             # Process Map
             st.subheader("Process Map")
-            process_map = create_process_map(df, case_id, activity, resource)
-            st.graphviz_chart(process_map)
-            
-            add_explanation("Process Map", "The process map visualizes the flow of activities. Nodes represent activities, while edges show transitions between activities. The thickness of edges indicates frequency of transitions. Start activities are in blue, end activities in pink.")
+            try:
+                process_map = create_process_map(df, case_id, activity, resource)
+                st.graphviz_chart(process_map)
+                add_explanation("Process Map", "The process map visualizes the flow of activities. Nodes represent activities, while edges show transitions between activities. The thickness of edges indicates frequency of transitions. Start activities are in blue, end activities in pink.")
+            except Exception as e:
+                st.error(f"Error generating process map: {str(e)}")
+                st.info("This might occur due to complexities in the process or limitations in the visualization library. Try filtering the data or adjusting the process map parameters.")
 
             # Variant Analysis
             st.subheader("Variant Analysis")
@@ -196,12 +202,16 @@ def main():
 
             # Activity Distribution
             st.subheader("Activity Distribution")
-            activity_counts = df[activity].value_counts()
-            fig = px.bar(activity_counts.reset_index(), x='index', y=activity, labels={'index': 'Activity', activity: 'Frequency'})
-            fig.update_layout(xaxis_title="Activity", yaxis_title="Frequency")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            add_explanation("Activity Distribution", "This chart shows the frequency of each activity in the process. It helps identify the most common and least common activities, which can be useful for process optimization.")
+            try:
+                activity_counts = df[activity].value_counts().reset_index()
+                activity_counts.columns = ['Activity', 'Frequency']
+                fig = px.bar(activity_counts, x='Activity', y='Frequency')
+                fig.update_layout(xaxis_title="Activity", yaxis_title="Frequency")
+                st.plotly_chart(fig, use_container_width=True)
+                add_explanation("Activity Distribution", "This chart shows the frequency of each activity in the process. It helps identify the most common and least common activities, which can be useful for process optimization.")
+            except Exception as e:
+                st.error(f"Error generating activity distribution: {str(e)}")
+                st.info("This might occur if there are issues with the activity column. Please check your data.")
 
             # Transition Matrix
             st.subheader("Transition Matrix")
@@ -219,11 +229,15 @@ def main():
             # Resource Analysis (if resource column is selected)
             if resource:
                 st.subheader("Resource Analysis")
-                resource_activity = df.groupby(resource)[activity].value_counts().unstack(fill_value=0)
-                fig = px.imshow(resource_activity, labels=dict(x="Activity", y="Resource", color="Frequency"))
-                st.plotly_chart(fig, use_container_width=True)
-                
-                add_explanation("Resource Analysis", "This heatmap shows the frequency of activities performed by each resource. It helps identify specialization of resources and potential bottlenecks in the process.")
+                try:
+                    resource_activity = df.groupby(resource)[activity].value_counts().unstack(fill_value=0)
+                    fig = px.imshow(resource_activity, labels=dict(x="Activity", y="Resource", color="Frequency"))
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    add_explanation("Resource Analysis", "This heatmap shows the frequency of activities performed by each resource. It helps identify specialization of resources and potential bottlenecks in the process.")
+                except Exception as e:
+                    st.error(f"Error in resource analysis: {str(e)}")
+                    st.info("This might occur if there are issues with the resource or activity columns. Please check your data.")
 
     else:
         st.info("Please upload a CSV file to begin the analysis.")
