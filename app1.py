@@ -4,6 +4,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import networkx as nx
+import graphviz
+from io import StringIO
 
 # Set page config
 st.set_page_config(page_title="Advanced Process Mining App", layout="wide")
@@ -19,80 +21,23 @@ def correct_datetime(df, timestamp_col):
     df[timestamp_col] = pd.to_datetime(df[timestamp_col], infer_datetime_format=True)
     return df
 
-# Function to create process map
+# Function to create process map using Graphviz
 def create_process_map(df, case_id, activity):
-    G = nx.DiGraph()
+    dot = graphviz.Digraph(engine='dot')
+    dot.attr(rankdir='LR')
+
+    # Add nodes
+    for act in df[activity].unique():
+        dot.node(act, act)
+
+    # Add edges
     edges = df.groupby(case_id)[activity].apply(lambda x: list(zip(x, x[1:]))).explode()
     edge_counts = edges.value_counts()
 
     for (source, target), count in edge_counts.items():
-        G.add_edge(source, target, weight=count)
+        dot.edge(source, target, label=str(count))
 
-    pos = nx.spring_layout(G)
-    edge_x = []
-    edge_y = []
-    for edge in G.edges():
-        x0, y0 = pos[edge[0]]
-        x1, y1 = pos[edge[1]]
-        edge_x.extend([x0, x1, None])
-        edge_y.extend([y0, y1, None])
-
-    edge_trace = go.Scatter(
-        x=edge_x, y=edge_y,
-        line=dict(width=0.5, color='#888'),
-        hoverinfo='none',
-        mode='lines')
-
-    node_x = []
-    node_y = []
-    for node in G.nodes():
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
-
-    node_trace = go.Scatter(
-        x=node_x, y=node_y,
-        mode='markers',
-        hoverinfo='text',
-        marker=dict(
-            showscale=True,
-            colorscale='YlGnBu',
-            reversescale=True,
-            color=[],
-            size=10,
-            colorbar=dict(
-                thickness=15,
-                title='Node Connections',
-                xanchor='left',
-                titleside='right'
-            ),
-            line_width=2))
-
-    node_adjacencies = []
-    node_text = []
-    for node, adjacencies in enumerate(G.adjacency()):
-        node_adjacencies.append(len(adjacencies[1]))
-        node_text.append(f'{adjacencies[0]}<br># of connections: {len(adjacencies[1])}')
-
-    node_trace.marker.color = node_adjacencies
-    node_trace.text = node_text
-
-    fig = go.Figure(data=[edge_trace, node_trace],
-                 layout=go.Layout(
-                    title='Process Map',
-                    titlefont_size=16,
-                    showlegend=False,
-                    hovermode='closest',
-                    margin=dict(b=20,l=5,r=5,t=40),
-                    annotations=[ dict(
-                        text="",
-                        showarrow=False,
-                        xref="paper", yref="paper",
-                        x=0.005, y=-0.002 ) ],
-                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
-                    )
-    return fig
+    return dot
 
 # Function to create transition matrix
 def create_transition_matrix(df, case_id, activity):
@@ -143,14 +88,28 @@ def main():
             # Process Map
             st.subheader("Process Map")
             process_map = create_process_map(df, case_id, activity)
-            st.plotly_chart(process_map, use_container_width=True)
+            st.graphviz_chart(process_map)
 
             # Variant Analysis
             st.subheader("Variant Analysis")
-            variants = df.groupby(case_id)[activity].agg(lambda x: tuple(x)).value_counts()
-            fig = px.bar(variants.reset_index(), x='index', y='count', labels={'index': 'Variant', 'count': 'Frequency'})
-            fig.update_layout(xaxis_title="Variant", yaxis_title="Frequency")
-            st.plotly_chart(fig, use_container_width=True)
+            try:
+                variants = df.groupby(case_id)[activity].agg(lambda x: tuple(x)).value_counts().reset_index()
+                variants.columns = ['Variant', 'Frequency']
+                variants['Variant'] = variants['Variant'].astype(str)  # Convert tuple to string for display
+                variants = variants.head(10)  # Show top 10 variants
+
+                fig = px.bar(variants, x='Variant', y='Frequency', 
+                             labels={'Variant': 'Variant', 'Frequency': 'Frequency'},
+                             title='Top 10 Variants')
+                fig.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Display variant details in a table
+                st.write("Top 10 Variants Details:")
+                st.table(variants)
+            except Exception as e:
+                st.error(f"Error in variant analysis: {str(e)}")
+                st.info("This might occur if there are issues with the case ID or activity columns. Please check your data.")
 
             # Activity Distribution
             st.subheader("Activity Distribution")
