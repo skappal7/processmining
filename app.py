@@ -1,304 +1,116 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import networkx as nx
-import matplotlib.pyplot as plt
-import plotly.express as px
-import plotly.graph_objects as go
-from pm4py.objects.log.importer.xes import importer as xes_importer
-from pm4py.objects.conversion.log import converter as log_converter
-from pm4py.algo.discovery.alpha import algorithm as alpha_miner
-from pm4py.algo.discovery.inductive import algorithm as inductive_miner
-from pm4py.visualization.petri_net import visualizer as pn_visualizer
-from pm4py.algo.conformance.tokenreplay import algorithm as token_replay
-from pm4py.statistics.variants.log import get as variants_module
-from pm4py.statistics.traces.generic.log import case_statistics
-from pm4py.algo.filtering.log.variants import variants_filter
-from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
-from pm4py.algo.organizational_mining.sna import algorithm as sna
-from pm4py.statistics.traces.generic.log import case_arrival
-from pm4py.algo.filtering.log.attributes import attributes_filter
-from pm4py.util import constants
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-import io
+import graphviz
+import itertools
+import re
+from copy import deepcopy
+import xml.etree.ElementTree as ET
 
-# Set page config
-st.set_page_config(page_title="Contact Center Process Mining App", layout="wide")
+# Keep all the existing functions from the original code
 
-# Sidebar
-st.sidebar.title("Contact Center Process Mining")
-file_type = st.sidebar.selectbox("Select file type", ["CSV", "XES"])
-uploaded_file = st.sidebar.file_uploader(f"Choose a {file_type} file", type=file_type.lower())
+def main():
+    # default settings of the page
+    st.set_page_config(page_title="PM-training (Alpha Miner)", page_icon=":rocket:", 
+                       layout="wide", initial_sidebar_state="expanded")
+    # hide right menu and logo at the bottom 
+    hide_streamlit_style = """
+                           <style>
+                           #MainMenu {visibility: unhidden;}
+                           footer {visibility: hidden;}
+                           </style>
+                           """
+    st.markdown(hide_streamlit_style, unsafe_allow_html=True)              
 
-@st.cache_data
-def load_data(file, file_type):
-    if file_type == "CSV":
-        df = pd.read_csv(file)
-    else:  # XES
-        event_log = xes_importer.apply(file)
-        df = log_converter.apply(event_log, variant=log_converter.Variants.TO_DATA_FRAME)
-    return df
+    # =============================================================================
+    LNG = 'en'                  # interface language
+    md_text = get_dict_text()   # dict with markdown texts
+    # =============================================================================
+    # left panel      
+    # =============================================================================
+    page = st.sidebar.radio('**Alpha Miner**', 
+                            ['Alpha Algorithm']) 
+    graph_orientation = st.sidebar.radio('**Graph orientation (Left → Right or Top → Bottom)**',['LR','TB'],index = 0, horizontal = True)
+    st.sidebar.markdown('---')
+    st.sidebar.markdown(md_text['left_block_author_refs',LNG])                    
+    # =============================================================================   
+    # central panel
+    # =============================================================================   
+    st.markdown('##### Process Mining training. Alpha Miner (Bottom-Up Process Discovery)')   
 
-if uploaded_file is not None:
-    df = load_data(uploaded_file, file_type)
-    
-    # Column selection
-    st.sidebar.header("Select Columns")
-    case_id_col = st.sidebar.selectbox("Case ID", df.columns)
-    activity_col = st.sidebar.selectbox("Activity", df.columns)
-    timestamp_col = st.sidebar.selectbox("Timestamp", df.columns)
-    resource_col = st.sidebar.selectbox("Resource", df.columns, index=None)
-    
-    # Convert to event log
-    df['case:concept:name'] = df[case_id_col]
-    df['concept:name'] = df[activity_col]
-    df['time:timestamp'] = pd.to_datetime(df[timestamp_col])
-    if resource_col:
-        df['org:resource'] = df[resource_col]
-    
-    event_log = log_converter.apply(df)
+    # New section for file upload
+    st.subheader("Upload Event Log")
+    uploaded_file = st.file_uploader("Choose a CSV or XES file", type=['csv', 'xes'])
 
-    # Main content
-    st.title("Contact Center Process Mining Dashboard")
-
-    # 1. Process Map Visualization
-    st.header("1. Process Map Visualization")
-    try:
-        net, initial_marking, final_marking = alpha_miner.apply(event_log)
-        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-        st.graphviz_chart(gviz)
-    except Exception as e:
-        st.error(f"An error occurred while generating the process map: {str(e)}")
-        st.write("Displaying a simplified process flow instead.")
-        activities = df['concept:name'].unique()
-        G = nx.DiGraph()
-        G.add_nodes_from(activities)
-        for i in range(len(df) - 1):
-            if df.iloc[i]['case:concept:name'] == df.iloc[i+1]['case:concept:name']:
-                G.add_edge(df.iloc[i]['concept:name'], df.iloc[i+1]['concept:name'])
-        pos = nx.spring_layout(G)
-        fig, ax = plt.subplots()
-        nx.draw(G, pos, with_labels=True, node_color='lightblue', node_size=2000, font_size=8, arrows=True)
-        st.pyplot(fig)
-
-    # 2. Variant Analysis
-    st.header("2. Variant Analysis")
-    try:
-        variants_count = variants_module.get_variants(event_log)
-        variants_df = pd.DataFrame([(str(k), v) for k, v in variants_count.items()], columns=['Variant', 'Count'])
-        variants_df = variants_df.sort_values('Count', ascending=False).reset_index(drop=True)
-        
-        fig = px.bar(variants_df.head(10), x='Variant', y='Count', title='Top 10 Variants')
-        st.plotly_chart(fig)
-        
-        st.write(variants_df)
-    except Exception as e:
-        st.error(f"An error occurred during variant analysis: {str(e)}")
-        st.write("Unable to perform variant analysis.")
-
-    # 3. Process Summary
-    st.header("3. Process Summary")
-    try:
-        case_durations = df.groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400)
-        avg_duration = case_durations.mean()
-        median_duration = case_durations.median()
-        throughput_time = case_arrival.get_case_arrival_avg(event_log)
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Average Case Duration", f"{avg_duration:.2f} days")
-        col2.metric("Median Case Duration", f"{median_duration:.2f} days")
-        col3.metric("Average Throughput Time", f"{throughput_time:.2f} days")
-    except Exception as e:
-        st.error(f"An error occurred while calculating process summary: {str(e)}")
-        st.write("Unable to calculate detailed process summary.")
-
-    # 4. Conformance Checking
-    st.header("4. Conformance Checking")
-    try:
-        replayed_traces = token_replay.apply(event_log, net, initial_marking, final_marking)
-        conf_df = pd.DataFrame(replayed_traces)
-        
-        fitness = sum(conf_df['trace_fitness']) / len(conf_df)
-        st.metric("Overall Process Fitness", f"{fitness:.2%}")
-        
-        fig = px.histogram(conf_df, x='trace_fitness', nbins=20, title='Trace Fitness Distribution')
-        st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"An error occurred during conformance checking: {str(e)}")
-        st.write("Unable to perform conformance checking.")
-
-    # 5. Social Network Analysis
-    st.header("5. Social Network Analysis")
-    if resource_col:
-        try:
-            hw_values = sna.apply(event_log, variant=sna.Variants.HANDOVER_LOG)
-            hw_df = pd.DataFrame([(k[0], k[1], v) for k, v in hw_values.items()], columns=['source', 'target', 'value'])
-            
-            G = nx.from_pandas_edgelist(hw_df, 'source', 'target', 'value')
-            pos = nx.spring_layout(G)
-            
-            edge_x = []
-            edge_y = []
-            for edge in G.edges():
-                x0, y0 = pos[edge[0]]
-                x1, y1 = pos[edge[1]]
-                edge_x.extend([x0, x1, None])
-                edge_y.extend([y0, y1, None])
-
-            edge_trace = go.Scatter(
-                x=edge_x, y=edge_y,
-                line=dict(width=0.5, color='#888'),
-                hoverinfo='none',
-                mode='lines')
-
-            node_x = [pos[node][0] for node in G.nodes()]
-            node_y = [pos[node][1] for node in G.nodes()]
-
-            node_trace = go.Scatter(
-                x=node_x, y=node_y,
-                mode='markers',
-                hoverinfo='text',
-                marker=dict(
-                    showscale=True,
-                    colorscale='YlGnBu',
-                    size=10,
-                    colorbar=dict(
-                        thickness=15,
-                        title='Node Connections',
-                        xanchor='left',
-                        titleside='right'
-                    )
-                )
-            )
-
-            node_adjacencies = []
-            node_text = []
-            for node, adjacencies in enumerate(G.adjacency()):
-                node_adjacencies.append(len(adjacencies[1]))
-                node_text.append(f'{list(G.nodes())[node]}: {len(adjacencies[1])} connections')
-
-            node_trace.marker.color = node_adjacencies
-            node_trace.text = node_text
-
-            fig = go.Figure(data=[edge_trace, node_trace],
-                            layout=go.Layout(
-                                title='Social Network Analysis',
-                                showlegend=False,
-                                hovermode='closest',
-                                margin=dict(b=20,l=5,r=5,t=40),
-                                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
-                            )
-
-            st.plotly_chart(fig)
-        except Exception as e:
-            st.error(f"An error occurred during social network analysis: {str(e)}")
-            st.write("Unable to perform social network analysis.")
+    if uploaded_file is not None:
+        df_log = process_uploaded_file(uploaded_file)
+        if df_log is not None:
+            st.write("Event Log Preview:")
+            st.write(df_log.head())
     else:
-        st.write("Resource column not selected. Social Network Analysis is not available.")
+        # Original code for selecting default event logs
+        st.markdown(md_text['common_block',LNG])    
+        with st.expander("Select an event log for training", expanded = True):
+            st.markdown(md_text['log_list',LNG])
+            
+            col1_log, col2_log = st.columns(2)
+            st_radio_select_log = col1_log.radio('Choose one of the default event logs', 
+                                         ('L1','L2','L3','L4','L5','L6','L7','L8'), 
+                                           index = 0, horizontal = True)
+            col2_log.write(''); col2_log.write('')
+            st_check_edit_log = col2_log.checkbox('Modify selected event log',value = False)
+            
+            if st_check_edit_log:
+                selected_log = st.text_input('Edit your event log as a string', value = get_default_event_log(st_radio_select_log))
+                st.markdown(md_text['user_log_format_requirements',LNG])
+            else:
+                selected_log = get_default_event_log(st_radio_select_log)
 
-    # 6. Performance Analysis
-    st.header("6. Performance Analysis")
-    try:
-        case_durations = df.groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400)
-        
-        fig = px.histogram(case_durations, nbins=20, labels={'value': 'Case Duration (days)'}, title='Case Duration Distribution')
-        st.plotly_chart(fig)
-        
-        activities = df['concept:name'].unique()
-        activity_durations = {act: df[df['concept:name'] == act].groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400).mean() for act in activities}
-        
-        fig = px.bar(x=list(activity_durations.keys()), y=list(activity_durations.values()), 
-                     labels={'x': 'Activity', 'y': 'Average Duration (days)'}, title='Average Activity Duration')
-        st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"An error occurred during performance analysis: {str(e)}")
-        st.write("Unable to perform detailed performance analysis.")
+        # Original code for checking the selected event log
+        with st.expander("Check the selected event log in the table format", expanded = True): 
+            try:
+                df_log = get_df_log(selected_log)
+                if len(df_log)==0: raise Exception ('Error! Check your input data')   
+                st.write(df_log)   # show DataFrame
+            except Exception as ex_msg: st.warning(ex_msg)        
 
-    # 7. Predictive Analytics
-    st.header("7. Predictive Analytics")
-    try:
-        df['case:concept:name'] = df['case:concept:name'].astype('category').cat.codes
-        df['concept:name'] = df['concept:name'].astype('category').cat.codes
-        if resource_col:
-            df['org:resource'] = df['org:resource'].astype('category').cat.codes
-            features = ['case:concept:name', 'concept:name', 'org:resource']
-        else:
-            features = ['case:concept:name', 'concept:name']
-        
-        target = 'time:timestamp'
-        
-        X = df[features]
-        y = (df[target] - df[target].min()).dt.total_seconds()
-        
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-        model.fit(X_train, y_train)
-        
-        y_pred = model.predict(X_test)
-        mse = np.mean((y_test - y_pred)**2)
-        rmse = np.sqrt(mse)
-        
-        st.metric("Root Mean Square Error (RMSE) for Prediction", f"{rmse:.2f} seconds")
-        
-        feature_importance = pd.DataFrame({'feature': features, 'importance': model.feature_importances_})
-        feature_importance = feature_importance.sort_values('importance', ascending=False)
-        
-        fig = px.bar(feature_importance, x='feature', y='importance', title='Feature Importance for Prediction')
-        st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"An error occurred during predictive analytics: {str(e)}")
-        st.write("Unable to perform predictive analytics.")
+    # Rest of the original code...
+    if page == 'Alpha Algorithm':  
+        st.markdown('##### Constructing an Accepting Petri-Net based on the simple Event Log using the Alpha Algorithm')  
+        with st.form('Applying the Alpha Algorithm'):
+            st_submitt_start_alpha_algorithm = st.form_submit_button('Start the Alpha Algorithm')
+            if st_submitt_start_alpha_algorithm:
+                # Your existing alpha algorithm code here
+                # Make sure to use the df_log dataframe
 
-    # 8. Time-based Analysis
-    st.header("8. Time-based Analysis")
-    try:
-        df['date'] = df['time:timestamp'].dt.date
-        daily_cases = df.groupby('date')['case:concept:name'].nunique().reset_index()
-        daily_cases.columns = ['date', 'num_cases']
-        
-        fig = px.line(daily_cases, x='date', y='num_cases', title='Daily Number of Cases')
-        st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"An error occurred during time-based analysis: {str(e)}")
-        st.write("Unable to perform time-based analysis.")
+def process_uploaded_file(uploaded_file):
+    file_extension = uploaded_file.name.split('.')[-1].lower()
     
-    # 9. Filtering and Drill-down Capabilities
-    st.header("9. Filtering and Drill-down Capabilities")
-    
-    st.write("Select a date range to filter the data:")
-    try:
-        date_range = st.date_input("Date range", value=(df['time:timestamp'].min().date(), df['time:timestamp'].max().date()))
-        
-        filtered_df = df[(df['time:timestamp'].dt.date >= date_range[0]) & (df['time:timestamp'].dt.date <= date_range[1])]
-        
-        st.write(f"Number of cases in selected date range: {filtered_df['case:concept:name'].nunique()}")
-        
-        selected_case = st.selectbox("Select a case for detailed view:", filtered_df['case:concept:name'].unique())
-        
-        case_details = filtered_df[filtered_df['case:concept:name'] == selected_case].sort_values('time:timestamp')
-        st.write(case_details)
-    except Exception as e:
-        st.error(f"An error occurred during filtering and drill-down: {str(e)}")
-        st.write("Unable to perform filtering and drill-down analysis.")
+    if file_extension == 'csv':
+        df = pd.read_csv(uploaded_file)
+        return df
+    elif file_extension == 'xes':
+        return parse_xes(uploaded_file)
+    else:
+        st.error("Unsupported file format. Please upload a CSV or XES file.")
+        return None
 
-else:
-    st.write("Please upload a CSV or XES file to begin the analysis.")
+def parse_xes(file):
+    tree = ET.parse(file)
+    root = tree.getroot()
 
-# Add download button for the processed data
-if 'df' in locals():
-    try:
-        csv = df.to_csv(index=False)
-        st.download_button(
-            label="Download processed data as CSV",
-            data=csv,
-            file_name="processed_data.csv",
-            mime="text/csv",
-        )
-    except Exception as e:
-        st.error(f"An error occurred while preparing the download: {str(e)}")
-        st.write("Unable to provide download option for processed data.")
+    data = []
+    for trace in root.findall('{http://www.xes-standard.org/}trace'):
+        case_id = trace.find('{http://www.xes-standard.org/}string[@key="concept:name"]').get('value')
+        for event in trace.findall('{http://www.xes-standard.org/}event'):
+            event_data = {'case:concept:name': case_id}
+            for attr in event:
+                if attr.get('key') in ['concept:name', 'time:timestamp']:
+                    event_data[attr.get('key')] = attr.get('value')
+            data.append(event_data)
+
+    return pd.DataFrame(data)
+
+# Keep all other functions from the original code
+
+if __name__ == "__main__":
+    main()
