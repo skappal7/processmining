@@ -64,6 +64,10 @@ if uploaded_file is not None:
     # Main content
     st.title("Contact Center Process Mining Dashboard")
 
+    # Initialize variables
+    net = initial_marking = final_marking = None
+    long_duration_cluster = None
+
     # 1. Process Map Visualization
     st.header("1. Process Map Visualization")
     tab1, tab2 = st.tabs(["As-is Process", "Suggested Process"])
@@ -127,18 +131,21 @@ if uploaded_file is not None:
 
     # 4. Conformance Checking
     st.header("4. Conformance Checking")
-    try:
-        replayed_traces = token_replay.apply(event_log, net, initial_marking, final_marking)
-        conf_df = pd.DataFrame(replayed_traces)
-        
-        fitness = sum(conf_df['trace_fitness']) / len(conf_df)
-        st.metric("Overall Process Fitness", f"{fitness:.2%}")
-        
-        fig = px.histogram(conf_df, x='trace_fitness', nbins=20, title='Trace Fitness Distribution')
-        st.plotly_chart(fig)
-    except Exception as e:
-        st.error(f"An error occurred during conformance checking: {str(e)}")
-        st.write("Unable to perform conformance checking.")
+    if net and initial_marking and final_marking:
+        try:
+            replayed_traces = token_replay.apply(event_log, net, initial_marking, final_marking)
+            conf_df = pd.DataFrame(replayed_traces)
+            
+            fitness = sum(conf_df['trace_fitness']) / len(conf_df)
+            st.metric("Overall Process Fitness", f"{fitness:.2%}")
+            
+            fig = px.histogram(conf_df, x='trace_fitness', nbins=20, title='Trace Fitness Distribution')
+            st.plotly_chart(fig)
+        except Exception as e:
+            st.error(f"An error occurred during conformance checking: {str(e)}")
+            st.write("Unable to perform conformance checking.")
+    else:
+        st.write("Conformance checking is not available due to issues with process map generation.")
 
     # 5. Social Network Analysis
     st.header("5. Social Network Analysis")
@@ -318,8 +325,12 @@ if uploaded_file is not None:
         st.write("Minimize unnecessary handovers between resources to improve efficiency.")
     
     with rec3:
-        st.metric("Address Long-duration Cases", f"Target cluster {long_duration_cluster}")
-        st.write("Investigate and optimize the factors contributing to exceptionally long case durations.")
+        if long_duration_cluster is not None:
+            st.metric("Address Long-duration Cases", f"Target cluster {long_duration_cluster}")
+            st.write("Investigate and optimize the factors contributing to exceptionally long case durations.")
+        else:
+            st.metric("Address Long-duration Cases", "Analyze outliers")
+            st.write("Investigate cases with exceptionally long durations to identify optimization opportunities.")
 
     # 10. Time-based Analysis
     st.header("10. Time-based Analysis")
