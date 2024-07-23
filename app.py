@@ -86,6 +86,7 @@ def alpha_miner(activities, pairs):
     maximal_pairs = set()
     for a_set in powerset(T):
         for b_set in powerset(T):
+            a_set, b_set = set(a_set), set(b_set)  # Ensure these are sets
             if a_set and b_set and all(relations[a][b] == '->' for a in a_set for b in b_set):
                 if not any(a_set.issubset(other_a) and b_set.issubset(other_b) 
                            for other_a, other_b in maximal_pairs 
@@ -98,7 +99,7 @@ def alpha_miner(activities, pairs):
     
     # Step 6: Create flow relations
     flow = set()
-    for i, (a_set, b_set) in enumerate(maximal_pairs, start=1):
+    for a_set, b_set in maximal_pairs:
         for a in a_set:
             flow.add((a, f"p_{'_'.join(sorted(a_set))}__{'_'.join(sorted(b_set))}"))
         for b in b_set:
