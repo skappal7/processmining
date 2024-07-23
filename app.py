@@ -59,16 +59,13 @@ def sanitize_node_name(name):
     return re.sub(r'[^a-zA-Z0-9_]+', '_', str(name))
 
 def alpha_miner(activities, pairs):
-    # Step 1: Get all activities
     T = set(activities['activity'])
     
-    # Step 2: Find initial and final activities
     Ti = set(pair[0] for pair in pairs['pair'])
     To = set(pair[1] for pair in pairs['pair'])
     start_activities = T - To
     end_activities = T - Ti
     
-    # Step 3: Find direct succession, causality, parallel and choice relations
     relations = defaultdict(lambda: defaultdict(str))
     for _, row in pairs.iterrows():
         a, b = row['pair']
@@ -85,22 +82,19 @@ def alpha_miner(activities, pairs):
             else:
                 relations[a][b] = '#'
     
-    # Step 4: Find maximal pairs
     maximal_pairs = set()
     for a_set in powerset(T):
         for b_set in powerset(T):
-            a_set, b_set = set(a_set), set(b_set)  # Ensure these are sets
+            a_set, b_set = set(a_set), set(b_set)
             if a_set and b_set and all(relations[a][b] == '->' for a in a_set for b in b_set):
                 if not any(a_set.issubset(other_a) and b_set.issubset(other_b) 
                            for other_a, other_b in maximal_pairs 
                            if (a_set, b_set) != (other_a, other_b)):
                     maximal_pairs.add((frozenset(a_set), frozenset(b_set)))
     
-    # Step 5: Create places
     places = [f"p_{'_'.join(sorted(a))}__{'_'.join(sorted(b))}" for a, b in maximal_pairs]
     places = ["start"] + places + ["end"]
     
-    # Step 6: Create flow relations
     flow = set()
     for a_set, b_set in maximal_pairs:
         for a in a_set:
@@ -123,11 +117,9 @@ def visualize_petri_net(T, places, flow):
     dot = graphviz.Digraph(comment='Petri Net')
     dot.attr(rankdir='LR')
     
-    # Add transitions
     for t in T:
         dot.node(sanitize_node_name(t), t, shape='rect')
     
-    # Add places
     for p in places:
         if p == "start":
             dot.node(p, "", shape='circle', style='filled', fillcolor='gray')
@@ -136,7 +128,6 @@ def visualize_petri_net(T, places, flow):
         else:
             dot.node(sanitize_node_name(p), "", shape='circle')
     
-    # Add flow relations
     for f in flow:
         dot.edge(sanitize_node_name(f[0]), sanitize_node_name(f[1]))
     
@@ -149,84 +140,7 @@ def variant_analysis(df, case_id_col, activity_col):
     variant_counts['Percentage'] = variant_counts['Count'] / variant_counts['Count'].sum() * 100
     return variant_counts
 
-def main():
-    st.title("Process Mining Application")
-    
-    uploaded_file = st.file_uploader("Choose an event log file", type=['csv', 'xes'])
-    
-    if uploaded_file is not None:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = parse_xes(uploaded_file)
-        
-        st.subheader("Event Log Preview")
-        st.dataframe(df.head())
-        
-        st.subheader("Column Selection")
-        columns = df.columns.tolist()
-        
-        case_id_col = st.selectbox("Select Case ID column", options=columns, index=0 if columns else None)
-        activity_col = st.selectbox("Select Activity Name column", options=columns, index=1 if len(columns) > 1 else None)
-        timestamp_col = st.selectbox("Select Timestamp column", options=columns, index=2 if len(columns) > 2 else None)
-        resource_col = st.selectbox("Select Resource column (optional)", options=['None'] + columns, index=0)
-        
-        if resource_col == 'None':
-            resource_col = None
-        
-        if case_id_col and activity_col and timestamp_col:
-            st.success("Columns selected successfully. You can now proceed with the analysis.")
-            
-            if st.button("Discover Process Model"):
-                activities, pairs = get_dfg(df, case_id_col, activity_col)
-                
-                st.subheader("Activity Frequencies")
-                st.dataframe(activities)
-                
-                st.subheader("Directly-Follows Graph")
-                dot_dfg = graphviz.Digraph(comment='Directly-Follows Graph')
-                for _, row in activities.iterrows():
-                    sanitized_name = sanitize_node_name(row['activity'])
-                    dot_dfg.node(sanitized_name, f"{row['activity']} ({row['frequency']})")
-                for _, row in pairs.iterrows():
-                    sanitized_start = sanitize_node_name(row['pair'][0])
-                    sanitized_end = sanitize_node_name(row['pair'][1])
-                    dot_dfg.edge(sanitized_start, sanitized_end, label=str(row['frequency']))
-                st.graphviz_chart(dot_dfg)
-                
-                st.subheader("Footprint")
-                footprint = get_footprint(pairs)
-                st.dataframe(footprint)
-                
-                st.subheader("Alpha Miner and Petri Net")
-                T, places, flow = alpha_miner(activities, pairs)
-                dot_pn = visualize_petri_net(T, places, flow)
-                st.graphviz_chart(dot_pn)
-                
-                st.subheader("Variant Analysis")
-                variants = variant_analysis(df, case_id_col, activity_col)
-                st.dataframe(variants)
-                
-                # Visualize top variants
-                top_variants = variants.head(5)  # Show top 5 variants
-                fig = px.bar(top_variants, x='Variant', y='Percentage', 
-                             title='Top 5 Process Variants',
-                             labels={'Variant': 'Process Variant', 'Percentage': 'Percentage of Cases'})
-                st.plotly_chart(fig)
-
-        else:
-            st.warning("""
-            Please select the appropriate columns to start the analysis:
-            - Case ID: Unique identifier for each process instance
-            - Activity Name: The name of the activity performed
-            - Timestamp: When the activity was performed
-            - Resource (Optional): Who performed the activity
-            
-            Once you've selected these columns, you can proceed with the process discovery.
-            """)
-
 def conformance_checking(df, case_id_col, activity_col, discovered_model):
-    # Simple conformance checking based on trace existence
     traces = df.groupby(case_id_col)[activity_col].agg(list)
     conforming_traces = 0
     non_conforming_traces = 0
@@ -241,7 +155,6 @@ def conformance_checking(df, case_id_col, activity_col, discovered_model):
     return fitness, conforming_traces, non_conforming_traces
 
 def check_trace_conformance(trace, model):
-    # Check if the trace follows the discovered model
     current_state = "start"
     for activity in trace:
         if (current_state, activity) in model:
@@ -257,11 +170,9 @@ def performance_analysis(df, case_id_col, activity_col, timestamp_col):
     return case_durations, activity_durations
 
 def process_enhancement(df, case_id_col, activity_col, timestamp_col):
-    # Identify bottlenecks
     activity_durations = df.groupby(activity_col).apply(lambda x: x[timestamp_col].diff().mean().total_seconds() / 60)
     bottlenecks = activity_durations.nlargest(3)
     
-    # Identify rework
     activity_frequencies = df.groupby(case_id_col)[activity_col].apply(lambda x: x.value_counts().to_dict())
     rework = activity_frequencies.apply(lambda x: {k: v for k, v in x.items() if v > 1})
     
@@ -341,70 +252,107 @@ def interactive_dfg(activities, pairs):
     return fig
 
 def main():
-    # ... (keep existing code up to the "Discover Process Model" button)
+    st.title("Process Mining Application")
+    
+    uploaded_file = st.file_uploader("Choose an event log file", type=['csv', 'xes'])
+    
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = parse_xes(uploaded_file)
+        
+        st.subheader("Event Log Preview")
+        st.dataframe(df.head())
+        
+        st.subheader("Column Selection")
+        columns = df.columns.tolist()
+        
+        case_id_col = st.selectbox("Select Case ID column", options=columns, index=0 if columns else None)
+        activity_col = st.selectbox("Select Activity Name column", options=columns, index=1 if len(columns) > 1 else None)
+        timestamp_col = st.selectbox("Select Timestamp column", options=columns, index=2 if len(columns) > 2 else None)
+        resource_col = st.selectbox("Select Resource column (optional)", options=['None'] + columns, index=0)
+        
+        if resource_col == 'None':
+            resource_col = None
+        
+        if case_id_col and activity_col and timestamp_col:
+            st.success("Columns selected successfully. You can now proceed with the analysis.")
+            
+            if st.button("Discover Process Model"):
+                activities, pairs = get_dfg(df, case_id_col, activity_col)
+                
+                st.subheader("Activity Frequencies")
+                st.dataframe(activities)
+                
+                st.subheader("Directly-Follows Graph")
+                dot_dfg = graphviz.Digraph(comment='Directly-Follows Graph')
+                for _, row in activities.iterrows():
+                    sanitized_name = sanitize_node_name(row['activity'])
+                    dot_dfg.node(sanitized_name, f"{row['activity']} ({row['frequency']})")
+                for _, row in pairs.iterrows():
+                    sanitized_start = sanitize_node_name(row['pair'][0])
+                    sanitized_end = sanitize_node_name(row['pair'][1])
+                    dot_dfg.edge(sanitized_start, sanitized_end, label=str(row['frequency']))
+                st.graphviz_chart(dot_dfg)
+                
+                st.subheader("Interactive Directly-Follows Graph")
+                fig_dfg = interactive_dfg(activities, pairs)
+                st.plotly_chart(fig_dfg)
+                
+                st.subheader("Footprint")
+                footprint = get_footprint(pairs)
+                st.dataframe(footprint)
+                
+                st.subheader("Alpha Miner and Petri Net")
+                T, places, flow = alpha_miner(activities, pairs)
+                dot_pn = visualize_petri_net(T, places, flow)
+                st.graphviz_chart(dot_pn)
+                
+                st.subheader("Conformance Checking")
+                discovered_model = {(f[0], f[1]) for f in flow}
+                fitness, conforming, non_conforming = conformance_checking(df, case_id_col, activity_col, discovered_model)
+                st.write(f"Fitness: {fitness:.2f}")
+                st.write(f"Conforming traces: {conforming}")
+                st.write(f"Non-conforming traces: {non_conforming}")
+                
+                st.subheader("Performance Analysis")
+                case_durations, activity_durations = performance_analysis(df, case_id_col, activity_col, timestamp_col)
+                st.write("Case Durations (hours):")
+                st.dataframe(case_durations.describe())
+                st.write("Activity Durations (minutes):")
+                st.dataframe(activity_durations)
+                
+                st.subheader("Process Enhancement")
+                bottlenecks, rework = process_enhancement(df, case_id_col, activity_col, timestamp_col)
+                st.write("Top 3 Bottlenecks (Activity, Average Duration in minutes):")
+                st.dataframe(bottlenecks)
+                st.write("Rework Activities:")
+                st.write(rework)
 
-    if st.button("Discover Process Model"):
-        activities, pairs = get_dfg(df, case_id_col, activity_col)
-        
-        st.subheader("Activity Frequencies")
-        st.dataframe(activities)
-        
-        st.subheader("Directly-Follows Graph")
-        dot_dfg = graphviz.Digraph(comment='Directly-Follows Graph')
-        for _, row in activities.iterrows():
-            sanitized_name = sanitize_node_name(row['activity'])
-            dot_dfg.node(sanitized_name, f"{row['activity']} ({row['frequency']})")
-        for _, row in pairs.iterrows():
-            sanitized_start = sanitize_node_name(row['pair'][0])
-            sanitized_end = sanitize_node_name(row['pair'][1])
-            dot_dfg.edge(sanitized_start, sanitized_end, label=str(row['frequency']))
-        st.graphviz_chart(dot_dfg)
-        
-        st.subheader("Interactive Directly-Follows Graph")
-        fig_dfg = interactive_dfg(activities, pairs)
-        st.plotly_chart(fig_dfg)
-        
-        st.subheader("Footprint")
-        footprint = get_footprint(pairs)
-        st.dataframe(footprint)
-        
-        st.subheader("Alpha Miner and Petri Net")
-        T, places, flow = alpha_miner(activities, pairs)
-        dot_pn = visualize_petri_net(T, places, flow)
-        st.graphviz_chart(dot_pn)
-        
-        st.subheader("Conformance Checking")
-        discovered_model = {(f[0], f[1]) for f in flow}
-        fitness, conforming, non_conforming = conformance_checking(df, case_id_col, activity_col, discovered_model)
-        st.write(f"Fitness: {fitness:.2f}")
-        st.write(f"Conforming traces: {conforming}")
-        st.write(f"Non-conforming traces: {non_conforming}")
-        
-        st.subheader("Performance Analysis")
-        case_durations, activity_durations = performance_analysis(df, case_id_col, activity_col, timestamp_col)
-        st.write("Case Durations (hours):")
-        st.dataframe(case_durations.describe())
-        st.write("Activity Durations (minutes):")
-        st.dataframe(activity_durations)
-        
-        st.subheader("Process Enhancement")
-        bottlenecks, rework = process_enhancement(df, case_id_col, activity_col, timestamp_col)
-        st.write("Top 3 Bottlenecks (Activity, Average Duration in minutes):")
-        st.dataframe(bottlenecks)
-        st.write("Rework Activities:")
-        st.write(rework)
-        
-        st.subheader("Variant Analysis")
-        variants = variant_analysis(df, case_id_col, activity_col)
-        st.dataframe(variants)
-        
-        # Visualize top variants
-        top_variants = variants.head(5)  # Show top 5 variants
-        fig = px.bar(top_variants, x='Variant', y='Percentage', 
-                     title='Top 5 Process Variants',
-                     labels={'Variant': 'Process Variant', 'Percentage': 'Percentage of Cases'})
-        st.plotly_chart(fig)
+                st.subheader("Variant Analysis")
+                variants = variant_analysis(df, case_id_col, activity_col)
+                st.dataframe(variants)
+                
+                # Visualize top variants
+                top_variants = variants.head(5)  # Show top 5 variants
+                fig = px.bar(top_variants, x='Variant', y='Percentage', 
+                             title='Top 5 Process Variants',
+                             labels={'Variant': 'Process Variant', 'Percentage': 'Percentage of Cases'})
+                st.plotly_chart(fig)
 
+        else:
+            st.warning("""
+            Please select the appropriate columns to start the analysis:
+            - Case ID: Unique identifier for each process instance
+            - Activity Name: The name of the activity performed
+            - Timestamp: When the activity was performed
+            - Resource (Optional): Who performed the activity
+            
+            Once you've selected these columns, you can proceed with the process discovery.
+            """)
 
 if __name__ == "__main__":
     main()
+
+                
