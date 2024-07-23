@@ -23,7 +23,6 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-import io
 
 # Set page config
 st.set_page_config(page_title="Contact Center Process Mining App", layout="wide")
@@ -53,54 +52,32 @@ if uploaded_file is not None:
     resource_col = st.sidebar.selectbox("Resource", df.columns, index=None)
     
     # Convert to event log
-    df['case:concept:name'] = df[case_id_col]
-    df['concept:name'] = df[activity_col]
+    df['case:concept:name'] = df[case_id_col].astype(str)
+    df['concept:name'] = df[activity_col].astype(str)
     df['time:timestamp'] = pd.to_datetime(df[timestamp_col])
     if resource_col:
-        df['org:resource'] = df[resource_col]
+        df['org:resource'] = df[resource_col].astype(str)
     
     event_log = log_converter.apply(df)
 
     # Main content
     st.title("Contact Center Process Mining Dashboard")
 
-    # Initialize variables
-    net = initial_marking = final_marking = None
-    long_duration_cluster = None
-
     # 1. Process Map Visualization
     st.header("1. Process Map Visualization")
-    tab1, tab2 = st.tabs(["As-is Process", "Suggested Process"])
-
     try:
-        with tab1:
-            net, initial_marking, final_marking = alpha_miner.apply(event_log)
-            gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-            st.image(gviz)
-        
-        with tab2:
-            tree = inductive_miner.apply_tree(event_log)
-            net, initial_marking, final_marking = inductive_miner.apply(event_log)
-            gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-            st.image(gviz)
+        net, initial_marking, final_marking = alpha_miner.apply(event_log)
+        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+        st.image(gviz)
     except Exception as e:
         st.error(f"An error occurred while generating the process map: {str(e)}")
-        st.write("As an alternative, here's a summary of the process:")
-        
-        # Generate a simple summary of the process
-        activities = df[activity_col].value_counts()
-        st.write("Top 10 activities:")
-        st.write(activities.head(10))
-        
-        st.write("Number of unique cases:", df[case_id_col].nunique())
-        st.write("Number of unique activities:", df[activity_col].nunique())
-        st.write("Date range:", df[timestamp_col].min(), "to", df[timestamp_col].max())
+        st.write("Unable to generate process map.")
 
     # 2. Variant Analysis
     st.header("2. Variant Analysis")
     try:
         variants_count = variants_module.get_variants(event_log)
-        variants_df = pd.DataFrame([(k, v) for k, v in variants_count.items()], columns=['Variant', 'Count'])
+        variants_df = pd.DataFrame([(str(k), v) for k, v in variants_count.items()], columns=['Variant', 'Count'])
         variants_df = variants_df.sort_values('Count', ascending=False).reset_index(drop=True)
         
         fig = px.bar(variants_df.head(10), x='Variant', y='Count', title='Top 10 Variants')
@@ -109,14 +86,12 @@ if uploaded_file is not None:
         st.write(variants_df)
     except Exception as e:
         st.error(f"An error occurred during variant analysis: {str(e)}")
-        st.write("Unable to perform variant analysis. Here's a summary of activities instead:")
-        activity_counts = df[activity_col].value_counts()
-        st.write(activity_counts)
+        st.write("Unable to perform variant analysis.")
 
     # 3. Process Summary
     st.header("3. Process Summary")
     try:
-        case_durations = case_statistics.get_all_casedurations(event_log)
+        case_durations = case_statistics.get_case_durations(event_log)
         avg_duration = sum(case_durations) / len(case_durations)
         median_duration = np.median(case_durations)
         throughput_time = case_arrival.get_case_arrival_avg(event_log)
@@ -131,29 +106,25 @@ if uploaded_file is not None:
 
     # 4. Conformance Checking
     st.header("4. Conformance Checking")
-    if net and initial_marking and final_marking:
-        try:
-            replayed_traces = token_replay.apply(event_log, net, initial_marking, final_marking)
-            conf_df = pd.DataFrame(replayed_traces)
-            
-            fitness = sum(conf_df['trace_fitness']) / len(conf_df)
-            st.metric("Overall Process Fitness", f"{fitness:.2%}")
-            
-            fig = px.histogram(conf_df, x='trace_fitness', nbins=20, title='Trace Fitness Distribution')
-            st.plotly_chart(fig)
-        except Exception as e:
-            st.error(f"An error occurred during conformance checking: {str(e)}")
-            st.write("Unable to perform conformance checking.")
-    else:
-        st.write("Conformance checking is not available due to issues with process map generation.")
+    try:
+        replayed_traces = token_replay.apply(event_log, net, initial_marking, final_marking)
+        conf_df = pd.DataFrame(replayed_traces)
+        
+        fitness = sum(conf_df['trace_fitness']) / len(conf_df)
+        st.metric("Overall Process Fitness", f"{fitness:.2%}")
+        
+        fig = px.histogram(conf_df, x='trace_fitness', nbins=20, title='Trace Fitness Distribution')
+        st.plotly_chart(fig)
+    except Exception as e:
+        st.error(f"An error occurred during conformance checking: {str(e)}")
+        st.write("Unable to perform conformance checking.")
 
     # 5. Social Network Analysis
     st.header("5. Social Network Analysis")
     if resource_col:
         try:
             hw_values = sna.apply(event_log, variant=sna.Variants.HANDOVER_LOG)
-            hw_df = pd.DataFrame(hw_values).reset_index()
-            hw_df.columns = ['source', 'target', 'value']
+            hw_df = pd.DataFrame([(k[0], k[1], v) for k, v in hw_values.items()], columns=['source', 'target', 'value'])
             
             G = nx.from_pandas_edgelist(hw_df, 'source', 'target', 'value')
             pos = nx.spring_layout(G)
@@ -221,7 +192,7 @@ if uploaded_file is not None:
     # 6. Performance Analysis
     st.header("6. Performance Analysis")
     try:
-        case_durations = case_statistics.get_all_casedurations(event_log)
+        case_durations = case_statistics.get_case_durations(event_log)
         
         fig = px.histogram(case_durations, nbins=20, labels={'value': 'Case Duration (days)'}, title='Case Duration Distribution')
         st.plotly_chart(fig)
@@ -241,7 +212,6 @@ if uploaded_file is not None:
     # 7. Predictive Analytics
     st.header("7. Predictive Analytics")
     try:
-        # Prepare data for prediction
         df['case:concept:name'] = df['case:concept:name'].astype('category').cat.codes
         df['concept:name'] = df['concept:name'].astype('category').cat.codes
         if resource_col:
@@ -278,11 +248,8 @@ if uploaded_file is not None:
     # 8. Root Cause Analysis
     st.header("8. Root Cause Analysis")
     try:
-        # Cluster cases based on duration
-        case_durations = case_statistics.get_all_casedurations(event_log, parameters={constants.PARAMETER_CONSTANT_TIMESTAMP_KEY: "time:timestamp"})
-        case_duration_df = pd.DataFrame.from_dict(case_durations, orient='index', columns=['duration'])
-        case_duration_df = case_duration_df.reset_index()
-        case_duration_df.columns = ['case_id', 'duration']
+        case_durations = case_statistics.get_case_durations(event_log)
+        case_duration_df = pd.DataFrame(list(case_durations.items()), columns=['case_id', 'duration'])
         
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(case_duration_df[['duration']])
@@ -300,7 +267,7 @@ if uploaded_file is not None:
         long_cases_log = attributes_filter.apply(event_log, long_cases, parameters={constants.PARAMETER_CONSTANT_ATTRIBUTE_KEY: "case:concept:name", "positive": True})
         
         variants_count = variants_module.get_variants(long_cases_log)
-        variants_df = pd.DataFrame([(k, v) for k, v in variants_count.items()], columns=['Variant', 'Count'])
+        variants_df = pd.DataFrame([(str(k), v) for k, v in variants_count.items()], columns=['Variant', 'Count'])
         variants_df = variants_df.sort_values('Count', ascending=False).head(5).reset_index(drop=True)
         
         st.write("Top 5 variants in long-duration cases:")
@@ -325,7 +292,7 @@ if uploaded_file is not None:
         st.write("Minimize unnecessary handovers between resources to improve efficiency.")
     
     with rec3:
-        if long_duration_cluster is not None:
+        if 'long_duration_cluster' in locals():
             st.metric("Address Long-duration Cases", f"Target cluster {long_duration_cluster}")
             st.write("Investigate and optimize the factors contributing to exceptionally long case durations.")
         else:
