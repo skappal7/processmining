@@ -170,11 +170,12 @@ def performance_analysis(df, case_id_col, activity_col, timestamp_col):
     return case_durations, activity_durations
 
 def process_enhancement(df, case_id_col, activity_col, timestamp_col):
+    df[timestamp_col] = pd.to_datetime(df[timestamp_col])
     activity_durations = df.groupby(activity_col).apply(lambda x: x[timestamp_col].diff().mean().total_seconds() / 60)
     bottlenecks = activity_durations.nlargest(3)
     
-    activity_frequencies = df.groupby(case_id_col)[activity_col].apply(lambda x: x.value_counts().to_dict())
-    rework = activity_frequencies.apply(lambda x: {k: v for k, v in x.items() if v > 1})
+    rework = df.groupby(case_id_col)[activity_col].apply(lambda x: x.value_counts()[x.value_counts() > 1].to_dict())
+    rework = rework[rework.map(bool)]  # Remove empty dictionaries
     
     return bottlenecks, rework
 
@@ -329,7 +330,7 @@ def main():
                 st.dataframe(bottlenecks)
                 st.write("Rework Activities:")
                 st.write(rework)
-
+                
                 st.subheader("Variant Analysis")
                 variants = variant_analysis(df, case_id_col, activity_col)
                 st.dataframe(variants)
@@ -354,5 +355,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-                
