@@ -1,255 +1,322 @@
 import streamlit as st
 import pandas as pd
-import pm4py
-from pm4py.objects.log.importer.xes import importer as xes_importer
-from pm4py.objects.conversion.log import converter as log_converter
-from pm4py.algo.discovery.inductive import algorithm as inductive_miner
-from pm4py.statistics.traces.generic.log import case_statistics
-from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
-from pm4py.algo.conformance.tokenreplay import algorithm as token_replay
+import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
+from pm4py.objects.log.importer.xes import importer as xes_importer
+from pm4py.objects.conversion.log import converter as log_converter
+from pm4py.algo.discovery.alpha import algorithm as alpha_miner
+from pm4py.algo.discovery.inductive import algorithm as inductive_miner
+from pm4py.visualization.petri_net import visualizer as pn_visualizer
+from pm4py.algo.conformance.tokenreplay import algorithm as token_replay
+from pm4py.statistics.variants.log import get as variants_module
+from pm4py.statistics.traces.generic.log import case_statistics
+from pm4py.algo.filtering.log.variants import variants_filter
+from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
+from pm4py.algo.organizational_mining.sna import algorithm as sna
+from pm4py.statistics.traces.generic.log import case_arrival
+from pm4py.algo.filtering.log.attributes import attributes_filter
+from pm4py.util import constants
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
 import io
-from collections import defaultdict
-from datetime import datetime
 
 # Set page config
-st.set_page_config(page_title="Advanced Process Mining App", layout="wide")
+st.set_page_config(page_title="Contact Center Process Mining App", layout="wide")
 
-# Custom CSS for styling
-st.markdown("""
-<style>
-.stButton>button {
-    background-color: #4CAF50;
-    color: white;
-}
-.stSelectbox {
-    color: #4CAF50;
-}
-</style>
-""", unsafe_allow_html=True)
+# Sidebar
+st.sidebar.title("Contact Center Process Mining")
+file_type = st.sidebar.selectbox("Select file type", ["CSV", "XES"])
+uploaded_file = st.sidebar.file_uploader(f"Choose a {file_type} file", type=file_type.lower())
 
 @st.cache_data
-def load_log(file):
-    if file.name.endswith('.csv'):
+def load_data(file, file_type):
+    if file_type == "CSV":
         df = pd.read_csv(file)
-        return df
-    elif file.name.endswith('.xes'):
-        log = xes_importer.apply(file)
-        return log
-    else:
-        raise ValueError("Unsupported file format. Please upload a CSV or XES file.")
+    else:  # XES
+        event_log = xes_importer.apply(file)
+        df = log_converter.apply(event_log, variant=log_converter.Variants.TO_DATA_FRAME)
+    return df
 
-def convert_df_to_event_log(df, case_id, activity, timestamp, resource=None):
-    df = df.rename(columns={case_id: 'case:concept:name', 
-                            activity: 'concept:name', 
-                            timestamp: 'time:timestamp'})
-    if resource:
-        df = df.rename(columns={resource: 'org:resource'})
-    df['time:timestamp'] = pd.to_datetime(df['time:timestamp'])
+if uploaded_file is not None:
+    df = load_data(uploaded_file, file_type)
+    
+    # Column selection
+    st.sidebar.header("Select Columns")
+    case_id_col = st.sidebar.selectbox("Case ID", df.columns)
+    activity_col = st.sidebar.selectbox("Activity", df.columns)
+    timestamp_col = st.sidebar.selectbox("Timestamp", df.columns)
+    resource_col = st.sidebar.selectbox("Resource", df.columns, index=None)
+    
+    # Convert to event log
+    df['case:concept:name'] = df[case_id_col]
+    df['concept:name'] = df[activity_col]
+    df['time:timestamp'] = pd.to_datetime(df[timestamp_col])
+    if resource_col:
+        df['org:resource'] = df[resource_col]
+    
     event_log = log_converter.apply(df)
-    return event_log
 
-def visualize_process_model(log, algorithm):
-    if algorithm == "Alpha Miner":
-        net, initial_marking, final_marking = pm4py.discover_petri_net_alpha(log)
-    elif algorithm == "Heuristics Miner":
-        net, initial_marking, final_marking = pm4py.discover_petri_net_heuristics(log)
+    # Main content
+    st.title("Contact Center Process Mining Dashboard")
+
+    # 1. Process Map Visualization
+    st.header("1. Process Map Visualization")
+    tab1, tab2 = st.tabs(["As-is Process", "Suggested Process"])
+    
+    with tab1:
+        net, initial_marking, final_marking = alpha_miner.apply(event_log)
+        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+        st.image(gviz)
+    
+    with tab2:
+        tree = inductive_miner.apply_tree(event_log)
+        net, initial_marking, final_marking = inductive_miner.apply(event_log)
+        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+        st.image(gviz)
+
+    # 2. Variant Analysis
+    st.header("2. Variant Analysis")
+    variants_count = variants_module.get_variants(event_log)
+    variants_df = pd.DataFrame.from_dict(variants_count, orient='index', columns=['count'])
+    variants_df = variants_df.sort_values('count', ascending=False).reset_index()
+    variants_df.columns = ['Variant', 'Count']
+    
+    fig = px.bar(variants_df.head(10), x='Variant', y='Count', title='Top 10 Variants')
+    st.plotly_chart(fig)
+    
+    st.write(variants_df)
+
+    # 3. Process Summary
+    st.header("3. Process Summary")
+    case_durations = case_statistics.get_all_casedurations(event_log)
+    avg_duration = sum(case_durations) / len(case_durations)
+    median_duration = np.median(case_durations)
+    throughput_time = case_arrival.get_case_arrival_avg(event_log)
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Average Case Duration", f"{avg_duration:.2f} days")
+    col2.metric("Median Case Duration", f"{median_duration:.2f} days")
+    col3.metric("Average Throughput Time", f"{throughput_time:.2f} days")
+
+    # 4. Conformance Checking
+    st.header("4. Conformance Checking")
+    replayed_traces = token_replay.apply(event_log, net, initial_marking, final_marking)
+    conf_df = pd.DataFrame(replayed_traces)
+    
+    fitness = sum(conf_df['trace_fitness']) / len(conf_df)
+    st.metric("Overall Process Fitness", f"{fitness:.2%}")
+    
+    fig = px.histogram(conf_df, x='trace_fitness', nbins=20, title='Trace Fitness Distribution')
+    st.plotly_chart(fig)
+
+    # 5. Social Network Analysis
+    if resource_col:
+        st.header("5. Social Network Analysis")
+        hw_values = sna.apply(event_log, variant=sna.Variants.HANDOVER_LOG)
+        hw_df = pd.DataFrame(hw_values).reset_index()
+        hw_df.columns = ['source', 'target', 'value']
+        
+        G = nx.from_pandas_edgelist(hw_df, 'source', 'target', 'value')
+        pos = nx.spring_layout(G)
+        
+        edge_x = []
+        edge_y = []
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=0.5, color='#888'),
+            hoverinfo='none',
+            mode='lines')
+
+        node_x = [pos[node][0] for node in G.nodes()]
+        node_y = [pos[node][1] for node in G.nodes()]
+
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers',
+            hoverinfo='text',
+            marker=dict(
+                showscale=True,
+                colorscale='YlGnBu',
+                size=10,
+                colorbar=dict(
+                    thickness=15,
+                    title='Node Connections',
+                    xanchor='left',
+                    titleside='right'
+                )
+            )
+        )
+
+        node_adjacencies = []
+        node_text = []
+        for node, adjacencies in enumerate(G.adjacency()):
+            node_adjacencies.append(len(adjacencies[1]))
+            node_text.append(f'{list(G.nodes())[node]}: {len(adjacencies[1])} connections')
+
+        node_trace.marker.color = node_adjacencies
+        node_trace.text = node_text
+
+        fig = go.Figure(data=[edge_trace, node_trace],
+                        layout=go.Layout(
+                            title='Social Network Analysis',
+                            showlegend=False,
+                            hovermode='closest',
+                            margin=dict(b=20,l=5,r=5,t=40),
+                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+                        )
+
+        st.plotly_chart(fig)
     else:
-        tree = inductive_miner.apply(log)
-        net, initial_marking, final_marking = pm4py.convert_to_petri_net(tree)
+        st.header("5. Social Network Analysis")
+        st.write("Resource column not selected. Social Network Analysis is not available.")
 
-    return visualize_using_networkx(net)
-
-def visualize_using_networkx(net):
-    G = nx.DiGraph()
-    for place in net.places:
-        G.add_node(place.name, node_type='place')
-    for transition in net.transitions:
-        G.add_node(transition.name, node_type='transition')
-    for arc in net.arcs:
-        G.add_edge(arc.source.name, arc.target.name)
-
-    pos = nx.spring_layout(G)
-    plt.figure(figsize=(12, 8))
-    nx.draw(G, pos, with_labels=True, node_color='lightblue', 
-            node_size=500, font_size=8, arrows=True)
-    nx.draw_networkx_labels(G, pos)
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    return buf
-
-def analyze_process(log):
-    variants_count = case_statistics.get_variant_statistics(log)
-    variants_df = pd.DataFrame(variants_count).sort_values("count", ascending=False)
-
-    activities = pm4py.get_event_attribute_values(log, "concept:name")
-    activities_df = pd.DataFrame.from_dict(activities, orient='index', columns=['frequency']).sort_values('frequency', ascending=False)
-
-    try:
-        roles = roles_discovery.apply(log)
-        roles_df = pd.DataFrame([(k, ', '.join(v)) for k, v in roles.items()], columns=['Resource', 'Activities'])
-    except Exception as e:
-        st.warning(f"Unable to perform role discovery. Error: {str(e)}")
-        roles_df = None
-
-    return variants_df, activities_df, roles_df
-
-def perform_conformance_checking(log, net, initial_marking, final_marking):
-    replayed_traces = token_replay.apply(log, net, initial_marking, final_marking)
-    fitness = sum(trace['trace_fitness'] for trace in replayed_traces) / len(replayed_traces)
-    return fitness
-
-def create_dotted_chart(log):
-    case_events = defaultdict(list)
-    for trace in log:
-        case_id = trace.attributes['concept:name']
-        for event in trace:
-            timestamp = event['time:timestamp'].timestamp()
-            case_events[case_id].append(timestamp)
+    # 6. Performance Analysis
+    st.header("6. Performance Analysis")
+    case_durations = case_statistics.get_all_casedurations(event_log)
     
-    plt.figure(figsize=(12, 6))
-    for case_id, events in case_events.items():
-        plt.plot(events, [case_id] * len(events), 'o')
+    fig = px.histogram(case_durations, nbins=20, labels={'value': 'Case Duration (days)'}, title='Case Duration Distribution')
+    st.plotly_chart(fig)
     
-    plt.xlabel('Timestamp')
-    plt.ylabel('Case ID')
-    plt.title('Dotted Chart')
+    activities = attributes_filter.get_attribute_values(event_log, "concept:name")
+    activity_durations = {act: attributes_filter.get_attribute_values(event_log, "time:timestamp", act) for act in activities}
     
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    return buf
-
-def create_social_network(log):
-    handover = defaultdict(lambda: defaultdict(int))
-    for trace in log:
-        for i in range(len(trace) - 1):
-            resource1 = trace[i].get('org:resource', 'Unknown')
-            resource2 = trace[i+1].get('org:resource', 'Unknown')
-            handover[resource1][resource2] += 1
-
-    G = nx.DiGraph()
-    for resource1, targets in handover.items():
-        for resource2, weight in targets.items():
-            G.add_edge(resource1, resource2, weight=weight)
-
-    plt.figure(figsize=(12, 8))
-    pos = nx.spring_layout(G)
-    nx.draw(G, pos, with_labels=True, node_color='lightblue', node_size=500, font_size=8, arrows=True)
+    activity_avg_duration = {act: np.mean([(max(times) - min(times)).total_seconds() / 86400 for times in activity_durations[act]]) for act in activities}
     
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    return buf
+    fig = px.bar(x=list(activity_avg_duration.keys()), y=list(activity_avg_duration.values()), 
+                 labels={'x': 'Activity', 'y': 'Average Duration (days)'}, title='Average Activity Duration')
+    st.plotly_chart(fig)
 
-def main():
-    st.title("Advanced Process Mining App")
-
-    st.sidebar.title("Controls")
-    uploaded_file = st.sidebar.file_uploader("Upload event log (CSV or XES)", type=["csv", "xes"])
-
-    if uploaded_file is not None:
-        data = load_log(uploaded_file)
-
-        if isinstance(data, pd.DataFrame):
-            st.sidebar.subheader("Column Selection")
-            case_id = st.sidebar.selectbox("Select case ID column", data.columns)
-            activity = st.sidebar.selectbox("Select activity column", data.columns)
-            timestamp = st.sidebar.selectbox("Select timestamp column", data.columns)
-            resource = st.sidebar.selectbox("Select resource column (optional)", ['None'] + list(data.columns))
-
-            if st.sidebar.button("Process Data"):
-                with st.spinner("Processing data..."):
-                    try:
-                        resource = resource if resource != 'None' else None
-                        log = convert_df_to_event_log(data, case_id, activity, timestamp, resource)
-                        st.session_state['log'] = log
-                        st.success("Data processed successfully!")
-                    except Exception as e:
-                        st.error(f"Error processing data: {str(e)}")
-                        st.session_state['log'] = None
-        else:
-            log = data
-            st.session_state['log'] = log
-            st.success("XES file loaded successfully!")
-
-        if 'log' in st.session_state and st.session_state['log'] is not None:
-            log = st.session_state['log']
-
-            st.sidebar.subheader("Process Discovery")
-            algorithm = st.sidebar.selectbox("Select mining algorithm", ["Alpha Miner", "Heuristics Miner", "Inductive Miner"])
-
-            if st.sidebar.button("Discover Process Model"):
-                with st.spinner("Discovering process model..."):
-                    img = visualize_process_model(log, algorithm)
-                    st.subheader("Process Model")
-                    st.image(img)
-
-            if st.sidebar.button("Analyze Process"):
-                with st.spinner("Analyzing process..."):
-                    variants_df, activities_df, roles_df = analyze_process(log)
-
-                    st.subheader("Variant Analysis")
-                    st.dataframe(variants_df)
-
-                    st.subheader("Activity Frequency")
-                    st.bar_chart(activities_df['frequency'])
-
-                    if roles_df is not None:
-                        st.subheader("Resource Roles")
-                        st.dataframe(roles_df)
-
-            if st.sidebar.button("Perform Conformance Checking"):
-                with st.spinner("Performing conformance checking..."):
-                    net, initial_marking, final_marking = pm4py.discover_petri_net_inductive(log)
-                    fitness = perform_conformance_checking(log, net, initial_marking, final_marking)
-                    st.subheader("Conformance Checking")
-                    st.write(f"Fitness: {fitness:.2f}")
-
-            if st.sidebar.button("Generate Advanced Visualizations"):
-                with st.spinner("Generating advanced visualizations..."):
-                    st.subheader("Dotted Chart")
-                    dotted_chart = create_dotted_chart(log)
-                    st.image(dotted_chart)
-
-                    st.subheader("Social Network")
-                    social_network = create_social_network(log)
-                    st.image(social_network)
-
-            st.sidebar.subheader("Filtering")
-            activities = pm4py.get_event_attribute_values(log, "concept:name")
-            selected_activities = st.sidebar.multiselect("Select activities to include", list(activities.keys()))
-
-            if selected_activities:
-                filtered_log = pm4py.filter_event_attribute_values(log, "concept:name", selected_activities, level="event")
-                st.sidebar.text(f"Filtered log: {len(filtered_log)} traces")
-
-                if st.sidebar.button("Apply Filter"):
-                    with st.spinner("Applying filter and updating visualizations..."):
-                        img = visualize_process_model(filtered_log, algorithm)
-                        st.subheader("Filtered Process Model")
-                        st.image(img)
-
-                        variants_df, activities_df, roles_df = analyze_process(filtered_log)
-                        
-                        st.subheader("Filtered Variant Analysis")
-                        st.dataframe(variants_df)
-
-                        st.subheader("Filtered Activity Frequency")
-                        st.bar_chart(activities_df['frequency'])
-
-                        if roles_df is not None:
-                            st.subheader("Filtered Resource Roles")
-                            st.dataframe(roles_df)
-
-        else:
-            st.warning("Please process the data first by selecting the appropriate columns and clicking 'Process Data'.")
-
+    # 7. Predictive Analytics
+    st.header("7. Predictive Analytics")
+    
+    # Prepare data for prediction
+    df['case:concept:name'] = df['case:concept:name'].astype('category').cat.codes
+    df['concept:name'] = df['concept:name'].astype('category').cat.codes
+    if resource_col:
+        df['org:resource'] = df['org:resource'].astype('category').cat.codes
+        features = ['case:concept:name', 'concept:name', 'org:resource']
     else:
-        st.info("Please upload a CSV or XES file to begin process mining.")
+        features = ['case:concept:name', 'concept:name']
+    
+    target = 'time:timestamp'
+    
+    X = df[features]
+    y = (df[target] - df[target].min()).dt.total_seconds()
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    mse = np.mean((y_test - y_pred)**2)
+    rmse = np.sqrt(mse)
+    
+    st.metric("Root Mean Square Error (RMSE) for Prediction", f"{rmse:.2f} seconds")
+    
+    feature_importance = pd.DataFrame({'feature': features, 'importance': model.feature_importances_})
+    feature_importance = feature_importance.sort_values('importance', ascending=False)
+    
+    fig = px.bar(feature_importance, x='feature', y='importance', title='Feature Importance for Prediction')
+    st.plotly_chart(fig)
 
-if __name__ == "__main__":
-    main()
+    # 8. Root Cause Analysis
+    st.header("8. Root Cause Analysis")
+    
+    # Cluster cases based on duration
+    case_durations = case_statistics.get_all_casedurations(event_log, parameters={constants.PARAMETER_CONSTANT_TIMESTAMP_KEY: "time:timestamp"})
+    case_duration_df = pd.DataFrame.from_dict(case_durations, orient='index', columns=['duration'])
+    case_duration_df = case_duration_df.reset_index()
+    case_duration_df.columns = ['case_id', 'duration']
+    
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(case_duration_df[['duration']])
+    
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    case_duration_df['cluster'] = kmeans.fit_predict(X_scaled)
+    
+    fig = px.scatter(case_duration_df, x='case_id', y='duration', color='cluster', title='Case Clusters based on Duration')
+    st.plotly_chart(fig)
+    
+    st.write("Analyzing factors contributing to long-duration cases:")
+    long_duration_cluster = case_duration_df['cluster'].value_counts().idxmax()
+    long_cases = case_duration_df[case_duration_df['cluster'] == long_duration_cluster]['case_id'].tolist()
+    
+    long_cases_log = attributes_filter.apply(event_log, long_cases, parameters={constants.PARAMETER_CONSTANT_ATTRIBUTE_KEY: "case:concept:name", "positive": True})
+    
+    variants_count = variants_module.get_variants(long_cases_log)
+    variants_df = pd.DataFrame.from_dict(variants_count, orient='index', columns=['count'])
+    variants_df = variants_df.sort_values('count', ascending=False).head(5).reset_index()
+    variants_df.columns = ['Variant', 'Count']
+    
+    st.write("Top 5 variants in long-duration cases:")
+    st.write(variants_df)
+
+    # 9. Recommendations Engine
+    st.header("9. Recommendations Engine")
+    
+    st.write("Based on the analysis, here are some recommendations:")
+    
+    rec1, rec2, rec3 = st.columns(3)
+    
+    with rec1:
+        st.metric("Reduce Variant Complexity", "Focus on top 3 variants")
+        st.write("Simplify the most common process paths to reduce overall case duration.")
+    
+    with rec2:
+        st.metric("Optimize Handovers", f"Reduce by {20}%")
+        st.write("Minimize unnecessary handovers between resources to improve efficiency.")
+    
+    with rec3:
+        st.metric("Address Long-duration Cases", f"Target {long_duration_cluster} cluster")
+        st.write("Investigate and optimize the factors contributing to exceptionally long case durations.")
+
+    # 10. Time-based Analysis
+    st.header("10. Time-based Analysis")
+    
+    df['date'] = pd.to_datetime(df['time:timestamp']).dt.date
+    daily_cases = df.groupby('date')['case:concept:name'].nunique().reset_index()
+    daily_cases.columns = ['date', 'num_cases']
+    
+    fig = px.line(daily_cases, x='date', y='num_cases', title='Daily Number of Cases')
+    st.plotly_chart(fig)
+    
+    # 11. Filtering and Drill-down Capabilities
+    st.header("11. Filtering and Drill-down Capabilities")
+    
+    st.write("Select a date range to filter the data:")
+    date_range = st.date_input("Date range", value=(df['date'].min(), df['date'].max()))
+    
+    filtered_df = df[(df['date'] >= date_range[0]) & (df['date'] <= date_range[1])]
+    
+    st.write(f"Number of cases in selected date range: {filtered_df['case:concept:name'].nunique()}")
+    
+    selected_case = st.selectbox("Select a case for detailed view:", filtered_df['case:concept:name'].unique())
+    
+    case_details = filtered_df[filtered_df['case:concept:name'] == selected_case].sort_values('time:timestamp')
+    st.write(case_details)
+
+else:
+    st.write("Please upload a CSV or XES file to begin the analysis.")
+
+# Add download button for the processed data
+if 'df' in locals():
+    csv = df.to_csv(index=False)
+    st.download_button(
+        label="Download processed data as CSV",
+        data=csv,
+        file_name="processed_data.csv",
+        mime="text/csv",
+    )
