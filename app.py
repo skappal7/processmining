@@ -3,101 +3,15 @@ import pandas as pd
 import graphviz
 import itertools
 import re
-from copy import deepcopy
+from io import StringIO
 import xml.etree.ElementTree as ET
 
-# Keep all the existing functions from the original code
+st.set_page_config(page_title="Process Mining App", layout="wide", initial_sidebar_state="expanded")
 
-def main():
-    # default settings of the page
-    st.set_page_config(page_title="PM-training (Alpha Miner)", page_icon=":rocket:", 
-                       layout="wide", initial_sidebar_state="expanded")
-    # hide right menu and logo at the bottom 
-    hide_streamlit_style = """
-                           <style>
-                           #MainMenu {visibility: unhidden;}
-                           footer {visibility: hidden;}
-                           </style>
-                           """
-    st.markdown(hide_streamlit_style, unsafe_allow_html=True)              
-
-    # =============================================================================
-    LNG = 'en'                  # interface language
-    md_text = get_dict_text()   # dict with markdown texts
-    # =============================================================================
-    # left panel      
-    # =============================================================================
-    page = st.sidebar.radio('**Alpha Miner**', 
-                            ['Alpha Algorithm']) 
-    graph_orientation = st.sidebar.radio('**Graph orientation (Left → Right or Top → Bottom)**',['LR','TB'],index = 0, horizontal = True)
-    st.sidebar.markdown('---')
-    st.sidebar.markdown(md_text['left_block_author_refs',LNG])                    
-    # =============================================================================   
-    # central panel
-    # =============================================================================   
-    st.markdown('##### Process Mining training. Alpha Miner (Bottom-Up Process Discovery)')   
-
-    # New section for file upload
-    st.subheader("Upload Event Log")
-    uploaded_file = st.file_uploader("Choose a CSV or XES file", type=['csv', 'xes'])
-
-    if uploaded_file is not None:
-        df_log = process_uploaded_file(uploaded_file)
-        if df_log is not None:
-            st.write("Event Log Preview:")
-            st.write(df_log.head())
-    else:
-        # Original code for selecting default event logs
-        st.markdown(md_text['common_block',LNG])    
-        with st.expander("Select an event log for training", expanded = True):
-            st.markdown(md_text['log_list',LNG])
-            
-            col1_log, col2_log = st.columns(2)
-            st_radio_select_log = col1_log.radio('Choose one of the default event logs', 
-                                         ('L1','L2','L3','L4','L5','L6','L7','L8'), 
-                                           index = 0, horizontal = True)
-            col2_log.write(''); col2_log.write('')
-            st_check_edit_log = col2_log.checkbox('Modify selected event log',value = False)
-            
-            if st_check_edit_log:
-                selected_log = st.text_input('Edit your event log as a string', value = get_default_event_log(st_radio_select_log))
-                st.markdown(md_text['user_log_format_requirements',LNG])
-            else:
-                selected_log = get_default_event_log(st_radio_select_log)
-
-        # Original code for checking the selected event log
-        with st.expander("Check the selected event log in the table format", expanded = True): 
-            try:
-                df_log = get_df_log(selected_log)
-                if len(df_log)==0: raise Exception ('Error! Check your input data')   
-                st.write(df_log)   # show DataFrame
-            except Exception as ex_msg: st.warning(ex_msg)        
-
-    # Rest of the original code...
-    if page == 'Alpha Algorithm':  
-        st.markdown('##### Constructing an Accepting Petri-Net based on the simple Event Log using the Alpha Algorithm')  
-        with st.form('Applying the Alpha Algorithm'):
-            st_submitt_start_alpha_algorithm = st.form_submit_button('Start the Alpha Algorithm')
-            if st_submitt_start_alpha_algorithm:
-                # Your existing alpha algorithm code here
-                # Make sure to use the df_log dataframe
-
-def process_uploaded_file(uploaded_file):
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    
-    if file_extension == 'csv':
-        df = pd.read_csv(uploaded_file)
-        return df
-    elif file_extension == 'xes':
-        return parse_xes(uploaded_file)
-    else:
-        st.error("Unsupported file format. Please upload a CSV or XES file.")
-        return None
-
+@st.cache_data
 def parse_xes(file):
     tree = ET.parse(file)
     root = tree.getroot()
-
     data = []
     for trace in root.findall('{http://www.xes-standard.org/}trace'):
         case_id = trace.find('{http://www.xes-standard.org/}string[@key="concept:name"]').get('value')
@@ -107,10 +21,89 @@ def parse_xes(file):
                 if attr.get('key') in ['concept:name', 'time:timestamp']:
                     event_data[attr.get('key')] = attr.get('value')
             data.append(event_data)
-
     return pd.DataFrame(data)
 
-# Keep all other functions from the original code
+@st.cache_data
+def get_dfg(traces, frequencies):
+    df = pd.DataFrame({'trace': traces, 'frequency': frequencies})
+    df['activities'] = df['trace'].apply(list)
+    df['pairs'] = df['activities'].apply(lambda x: list(zip(x[:-1], x[1:])))
+    
+    activities = df.explode('activities')
+    activities_count = activities.groupby('activities')['frequency'].sum().reset_index()
+    
+    pairs = df.explode('pairs')
+    pairs_count = pairs.groupby('pairs')['frequency'].sum().reset_index()
+    
+    return activities_count, pairs_count
+
+@st.cache_data
+def get_footprint(pairs):
+    activities = sorted(set(pairs['pairs'].explode()))
+    footprint = pd.DataFrame(index=activities, columns=activities, data='#')
+    
+    for _, row in pairs.iterrows():
+        a, b = row['pairs']
+        footprint.at[a, b] = '→'
+        if footprint.at[b, a] == '→':
+            footprint.at[a, b] = footprint.at[b, a] = '||'
+    
+    return footprint
+
+@st.cache_data
+def alpha_miner(traces, frequencies):
+    activities_count, pairs_count = get_dfg(traces, frequencies)
+    footprint = get_footprint(pairs_count)
+    
+    # Alpha miner algorithm implementation
+    # ... (implement the algorithm here)
+    
+    return places, transitions, arcs
+
+def visualize_petri_net(places, transitions, arcs):
+    dot = graphviz.Digraph(comment='Petri Net')
+    dot.attr(rankdir='LR')
+    
+    for place in places:
+        dot.node(place, '', shape='circle')
+    
+    for transition in transitions:
+        dot.node(transition, transition, shape='rect')
+    
+    for arc in arcs:
+        dot.edge(arc[0], arc[1])
+    
+    return dot
+
+def main():
+    st.title("Process Mining Application")
+    
+    uploaded_file = st.file_uploader("Choose an event log file", type=['csv', 'xes'])
+    
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = parse_xes(uploaded_file)
+        
+        st.subheader("Event Log Preview")
+        st.dataframe(df.head())
+        
+        traces = df.groupby('case:concept:name')['concept:name'].agg(list)
+        frequencies = traces.value_counts()
+        
+        st.subheader("Process Discovery")
+        if st.button("Discover Process Model"):
+            places, transitions, arcs = alpha_miner(traces, frequencies)
+            
+            st.subheader("Discovered Petri Net")
+            dot = visualize_petri_net(places, transitions, arcs)
+            st.graphviz_chart(dot)
+            
+            st.subheader("Footprint")
+            _, pairs_count = get_dfg(traces, frequencies)
+            footprint = get_footprint(pairs_count)
+            st.dataframe(footprint)
 
 if __name__ == "__main__":
     main()
