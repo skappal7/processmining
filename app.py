@@ -67,17 +67,30 @@ if uploaded_file is not None:
     # 1. Process Map Visualization
     st.header("1. Process Map Visualization")
     tab1, tab2 = st.tabs(["As-is Process", "Suggested Process"])
-    
-    with tab1:
-        net, initial_marking, final_marking = alpha_miner.apply(event_log)
-        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-        st.image(gviz)
-    
-    with tab2:
-        tree = inductive_miner.apply_tree(event_log)
-        net, initial_marking, final_marking = inductive_miner.apply(event_log)
-        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
-        st.image(gviz)
+
+    try:
+        with tab1:
+            net, initial_marking, final_marking = alpha_miner.apply(event_log)
+            gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+            st.image(gviz)
+        
+        with tab2:
+            tree = inductive_miner.apply_tree(event_log)
+            net, initial_marking, final_marking = inductive_miner.apply(event_log)
+            gviz = pn_visualizer.apply(net, initial_marking, final_marking)
+            st.image(gviz)
+    except Exception as e:
+        st.error(f"An error occurred while generating the process map: {str(e)}")
+        st.write("As an alternative, here's a summary of the process:")
+        
+        # Generate a simple summary of the process
+        activities = df[activity_col].value_counts()
+        st.write("Top 10 activities:")
+        st.write(activities.head(10))
+        
+        st.write("Number of unique cases:", df[case_id_col].nunique())
+        st.write("Number of unique activities:", df[activity_col].nunique())
+        st.write("Date range:", df[timestamp_col].min(), "to", df[timestamp_col].max())
 
     # 2. Variant Analysis
     st.header("2. Variant Analysis")
