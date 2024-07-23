@@ -7,6 +7,9 @@ import xml.etree.ElementTree as ET
 import re
 from collections import defaultdict
 import plotly.express as px
+import plotly.graph_objects as go
+import networkx as nx
+from datetime import datetime
 
 st.set_page_config(page_title="Process Mining App", layout="wide", initial_sidebar_state="expanded")
 
@@ -221,6 +224,187 @@ def main():
             
             Once you've selected these columns, you can proceed with the process discovery.
             """)
+
+def conformance_checking(df, case_id_col, activity_col, discovered_model):
+    # Simple conformance checking based on trace existence
+    traces = df.groupby(case_id_col)[activity_col].agg(list)
+    conforming_traces = 0
+    non_conforming_traces = 0
+    
+    for trace in traces:
+        if check_trace_conformance(trace, discovered_model):
+            conforming_traces += 1
+        else:
+            non_conforming_traces += 1
+    
+    fitness = conforming_traces / (conforming_traces + non_conforming_traces)
+    return fitness, conforming_traces, non_conforming_traces
+
+def check_trace_conformance(trace, model):
+    # Check if the trace follows the discovered model
+    current_state = "start"
+    for activity in trace:
+        if (current_state, activity) in model:
+            current_state = activity
+        else:
+            return False
+    return current_state in model.get("end", set())
+
+def performance_analysis(df, case_id_col, activity_col, timestamp_col):
+    df[timestamp_col] = pd.to_datetime(df[timestamp_col])
+    case_durations = df.groupby(case_id_col).apply(lambda x: (x[timestamp_col].max() - x[timestamp_col].min()).total_seconds() / 3600)
+    activity_durations = df.groupby(activity_col).apply(lambda x: x[timestamp_col].diff().mean().total_seconds() / 60)
+    return case_durations, activity_durations
+
+def process_enhancement(df, case_id_col, activity_col, timestamp_col):
+    # Identify bottlenecks
+    activity_durations = df.groupby(activity_col).apply(lambda x: x[timestamp_col].diff().mean().total_seconds() / 60)
+    bottlenecks = activity_durations.nlargest(3)
+    
+    # Identify rework
+    activity_frequencies = df.groupby(case_id_col)[activity_col].apply(lambda x: x.value_counts().to_dict())
+    rework = activity_frequencies.apply(lambda x: {k: v for k, v in x.items() if v > 1})
+    
+    return bottlenecks, rework
+
+def interactive_dfg(activities, pairs):
+    G = nx.DiGraph()
+    for _, row in activities.iterrows():
+        G.add_node(row['activity'], weight=row['frequency'])
+    for _, row in pairs.iterrows():
+        G.add_edge(row['pair'][0], row['pair'][1], weight=row['frequency'])
+    
+    pos = nx.spring_layout(G)
+    edge_x = []
+    edge_y = []
+    for edge in G.edges():
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=0.5, color='#888'),
+        hoverinfo='none',
+        mode='lines')
+
+    node_x = []
+    node_y = []
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+
+    node_trace = go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers',
+        hoverinfo='text',
+        marker=dict(
+            showscale=True,
+            colorscale='YlGnBu',
+            reversescale=True,
+            color=[],
+            size=10,
+            colorbar=dict(
+                thickness=15,
+                title='Node Connections',
+                xanchor='left',
+                titleside='right'
+            ),
+            line_width=2))
+
+    node_adjacencies = []
+    node_text = []
+    for node, adjacencies in enumerate(G.adjacency()):
+        node_adjacencies.append(len(adjacencies[1]))
+        node_text.append(f'{adjacencies[0]} - # of connections: {len(adjacencies[1])}')
+
+    node_trace.marker.color = node_adjacencies
+    node_trace.text = node_text
+
+    fig = go.Figure(data=[edge_trace, node_trace],
+                    layout=go.Layout(
+                        title='Interactive Directly-Follows Graph',
+                        titlefont_size=16,
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=20,l=5,r=5,t=40),
+                        annotations=[ dict(
+                            text="",
+                            showarrow=False,
+                            xref="paper", yref="paper",
+                            x=0.005, y=-0.002 ) ],
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+                    )
+    return fig
+
+def main():
+    # ... (keep existing code up to the "Discover Process Model" button)
+
+    if st.button("Discover Process Model"):
+        activities, pairs = get_dfg(df, case_id_col, activity_col)
+        
+        st.subheader("Activity Frequencies")
+        st.dataframe(activities)
+        
+        st.subheader("Directly-Follows Graph")
+        dot_dfg = graphviz.Digraph(comment='Directly-Follows Graph')
+        for _, row in activities.iterrows():
+            sanitized_name = sanitize_node_name(row['activity'])
+            dot_dfg.node(sanitized_name, f"{row['activity']} ({row['frequency']})")
+        for _, row in pairs.iterrows():
+            sanitized_start = sanitize_node_name(row['pair'][0])
+            sanitized_end = sanitize_node_name(row['pair'][1])
+            dot_dfg.edge(sanitized_start, sanitized_end, label=str(row['frequency']))
+        st.graphviz_chart(dot_dfg)
+        
+        st.subheader("Interactive Directly-Follows Graph")
+        fig_dfg = interactive_dfg(activities, pairs)
+        st.plotly_chart(fig_dfg)
+        
+        st.subheader("Footprint")
+        footprint = get_footprint(pairs)
+        st.dataframe(footprint)
+        
+        st.subheader("Alpha Miner and Petri Net")
+        T, places, flow = alpha_miner(activities, pairs)
+        dot_pn = visualize_petri_net(T, places, flow)
+        st.graphviz_chart(dot_pn)
+        
+        st.subheader("Conformance Checking")
+        discovered_model = {(f[0], f[1]) for f in flow}
+        fitness, conforming, non_conforming = conformance_checking(df, case_id_col, activity_col, discovered_model)
+        st.write(f"Fitness: {fitness:.2f}")
+        st.write(f"Conforming traces: {conforming}")
+        st.write(f"Non-conforming traces: {non_conforming}")
+        
+        st.subheader("Performance Analysis")
+        case_durations, activity_durations = performance_analysis(df, case_id_col, activity_col, timestamp_col)
+        st.write("Case Durations (hours):")
+        st.dataframe(case_durations.describe())
+        st.write("Activity Durations (minutes):")
+        st.dataframe(activity_durations)
+        
+        st.subheader("Process Enhancement")
+        bottlenecks, rework = process_enhancement(df, case_id_col, activity_col, timestamp_col)
+        st.write("Top 3 Bottlenecks (Activity, Average Duration in minutes):")
+        st.dataframe(bottlenecks)
+        st.write("Rework Activities:")
+        st.write(rework)
+        
+        st.subheader("Variant Analysis")
+        variants = variant_analysis(df, case_id_col, activity_col)
+        st.dataframe(variants)
+        
+        # Visualize top variants
+        top_variants = variants.head(5)  # Show top 5 variants
+        fig = px.bar(top_variants, x='Variant', y='Percentage', 
+                     title='Top 5 Process Variants',
+                     labels={'Variant': 'Process Variant', 'Percentage': 'Percentage of Cases'})
+        st.plotly_chart(fig)
+
 
 if __name__ == "__main__":
     main()
