@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import graphviz
 import itertools
-import re
 from io import StringIO
 import xml.etree.ElementTree as ET
 
@@ -18,62 +17,37 @@ def parse_xes(file):
         for event in trace.findall('{http://www.xes-standard.org/}event'):
             event_data = {'case:concept:name': case_id}
             for attr in event:
-                if attr.get('key') in ['concept:name', 'time:timestamp']:
+                if attr.get('key') in ['concept:name', 'time:timestamp', 'org:resource']:
                     event_data[attr.get('key')] = attr.get('value')
             data.append(event_data)
     return pd.DataFrame(data)
 
 @st.cache_data
-def get_dfg(traces, frequencies):
-    df = pd.DataFrame({'trace': traces, 'frequency': frequencies})
-    df['activities'] = df['trace'].apply(list)
-    df['pairs'] = df['activities'].apply(lambda x: list(zip(x[:-1], x[1:])))
+def get_dfg(df, case_id_col, activity_col):
+    traces = df.groupby(case_id_col)[activity_col].agg(list)
+    frequencies = traces.value_counts()
     
-    activities = df.explode('activities')
-    activities_count = activities.groupby('activities')['frequency'].sum().reset_index()
+    activities = df[activity_col].value_counts().reset_index()
+    activities.columns = ['activity', 'frequency']
     
-    pairs = df.explode('pairs')
-    pairs_count = pairs.groupby('pairs')['frequency'].sum().reset_index()
+    pairs = traces.apply(lambda x: list(zip(x[:-1], x[1:])))
+    pairs_count = pairs.explode().value_counts().reset_index()
+    pairs_count.columns = ['pair', 'frequency']
     
-    return activities_count, pairs_count
+    return activities, pairs_count
 
 @st.cache_data
 def get_footprint(pairs):
-    activities = sorted(set(pairs['pairs'].explode()))
+    activities = sorted(set(pairs['pair'].explode()))
     footprint = pd.DataFrame(index=activities, columns=activities, data='#')
     
     for _, row in pairs.iterrows():
-        a, b = row['pairs']
+        a, b = row['pair']
         footprint.at[a, b] = '→'
         if footprint.at[b, a] == '→':
             footprint.at[a, b] = footprint.at[b, a] = '||'
     
     return footprint
-
-@st.cache_data
-def alpha_miner(traces, frequencies):
-    activities_count, pairs_count = get_dfg(traces, frequencies)
-    footprint = get_footprint(pairs_count)
-    
-    # Alpha miner algorithm implementation
-    # ... (implement the algorithm here)
-    
-    return places, transitions, arcs
-
-def visualize_petri_net(places, transitions, arcs):
-    dot = graphviz.Digraph(comment='Petri Net')
-    dot.attr(rankdir='LR')
-    
-    for place in places:
-        dot.node(place, '', shape='circle')
-    
-    for transition in transitions:
-        dot.node(transition, transition, shape='rect')
-    
-    for arc in arcs:
-        dot.edge(arc[0], arc[1])
-    
-    return dot
 
 def main():
     st.title("Process Mining Application")
@@ -89,21 +63,50 @@ def main():
         st.subheader("Event Log Preview")
         st.dataframe(df.head())
         
-        traces = df.groupby('case:concept:name')['concept:name'].agg(list)
-        frequencies = traces.value_counts()
+        st.subheader("Column Selection")
+        columns = df.columns.tolist()
         
-        st.subheader("Process Discovery")
-        if st.button("Discover Process Model"):
-            places, transitions, arcs = alpha_miner(traces, frequencies)
+        case_id_col = st.selectbox("Select Case ID column", options=columns, index=0 if columns else None)
+        activity_col = st.selectbox("Select Activity Name column", options=columns, index=1 if len(columns) > 1 else None)
+        timestamp_col = st.selectbox("Select Timestamp column", options=columns, index=2 if len(columns) > 2 else None)
+        resource_col = st.selectbox("Select Resource column (optional)", options=['None'] + columns, index=0)
+        
+        if resource_col == 'None':
+            resource_col = None
+        
+        if case_id_col and activity_col and timestamp_col:
+            st.success("Columns selected successfully. You can now proceed with the analysis.")
             
-            st.subheader("Discovered Petri Net")
-            dot = visualize_petri_net(places, transitions, arcs)
-            st.graphviz_chart(dot)
+            if st.button("Discover Process Model"):
+                activities, pairs = get_dfg(df, case_id_col, activity_col)
+                
+                st.subheader("Activity Frequencies")
+                st.dataframe(activities)
+                
+                st.subheader("Directly-Follows Graph")
+                dot = graphviz.Digraph(comment='Directly-Follows Graph')
+                for _, row in activities.iterrows():
+                    dot.node(row['activity'], f"{row['activity']} ({row['frequency']})")
+                for _, row in pairs.iterrows():
+                    dot.edge(row['pair'][0], row['pair'][1], label=str(row['frequency']))
+                st.graphviz_chart(dot)
+                
+                st.subheader("Footprint")
+                footprint = get_footprint(pairs)
+                st.dataframe(footprint)
+                
+                # Here you would add your alpha miner algorithm and Petri net visualization
+                st.info("Alpha Miner algorithm and Petri Net visualization would be implemented here.")
+        else:
+            st.warning("""
+            Please select the appropriate columns to start the analysis:
+            - Case ID: Unique identifier for each process instance
+            - Activity Name: The name of the activity performed
+            - Timestamp: When the activity was performed
+            - Resource (Optional): Who performed the activity
             
-            st.subheader("Footprint")
-            _, pairs_count = get_dfg(traces, frequencies)
-            footprint = get_footprint(pairs_count)
-            st.dataframe(footprint)
+            Once you've selected these columns, you can proceed with the process discovery.
+            """)
 
 if __name__ == "__main__":
     main()
