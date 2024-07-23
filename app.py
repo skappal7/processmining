@@ -93,16 +93,16 @@ def alpha_miner(activities, pairs):
                     maximal_pairs.add((frozenset(a_set), frozenset(b_set)))
     
     # Step 5: Create places
-    places = [f"p_{{{','.join(sorted(a))}}}__{{{','.join(sorted(b))}}}" for a, b in maximal_pairs]
+    places = [f"p_{'_'.join(sorted(a))}__{'_'.join(sorted(b))}" for a, b in maximal_pairs]
     places = ["start"] + places + ["end"]
     
     # Step 6: Create flow relations
     flow = set()
     for i, (a_set, b_set) in enumerate(maximal_pairs, start=1):
         for a in a_set:
-            flow.add((a, f"p_{{{','.join(sorted(a_set))}}}__{{{','.join(sorted(b_set))}}}}"))
+            flow.add((a, f"p_{'_'.join(sorted(a_set))}__{'_'.join(sorted(b_set))}"))
         for b in b_set:
-            flow.add((f"p_{{{','.join(sorted(a_set))}}}__{{{','.join(sorted(b_set))}}}", b))
+            flow.add((f"p_{'_'.join(sorted(a_set))}__{'_'.join(sorted(b_set))}", b))
     
     for start in start_activities:
         flow.add(("start", start))
