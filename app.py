@@ -165,8 +165,14 @@ def check_trace_conformance(trace, model):
 
 def performance_analysis(df, case_id_col, activity_col, timestamp_col):
     df[timestamp_col] = pd.to_datetime(df[timestamp_col])
+    df = df.sort_values([case_id_col, timestamp_col])
+    
     case_durations = df.groupby(case_id_col).apply(lambda x: (x[timestamp_col].max() - x[timestamp_col].min()).total_seconds() / 3600)
-    activity_durations = df.groupby(activity_col).apply(lambda x: x[timestamp_col].diff().mean().total_seconds() / 60)
+    
+    df['next_timestamp'] = df.groupby(case_id_col)[timestamp_col].shift(-1)
+    df['duration'] = (df['next_timestamp'] - df[timestamp_col]).dt.total_seconds() / 60
+    activity_durations = df.groupby(activity_col)['duration'].mean()
+    
     return case_durations, activity_durations
 
 def process_enhancement(df, case_id_col, activity_col, timestamp_col):
