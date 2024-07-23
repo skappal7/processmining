@@ -4,6 +4,7 @@ import graphviz
 import itertools
 from io import StringIO
 import xml.etree.ElementTree as ET
+import re
 
 st.set_page_config(page_title="Process Mining App", layout="wide", initial_sidebar_state="expanded")
 
@@ -49,6 +50,9 @@ def get_footprint(pairs):
     
     return footprint
 
+def sanitize_node_name(name):
+    return re.sub(r'[^a-zA-Z0-9_]+', '_', str(name))
+
 def main():
     st.title("Process Mining Application")
     
@@ -86,16 +90,19 @@ def main():
                 st.subheader("Directly-Follows Graph")
                 dot = graphviz.Digraph(comment='Directly-Follows Graph')
                 for _, row in activities.iterrows():
-                    dot.node(row['activity'], f"{row['activity']} ({row['frequency']})")
+                    sanitized_name = sanitize_node_name(row['activity'])
+                    dot.node(sanitized_name, f"{row['activity']} ({row['frequency']})")
                 for _, row in pairs.iterrows():
-                    dot.edge(row['pair'][0], row['pair'][1], label=str(row['frequency']))
+                    sanitized_start = sanitize_node_name(row['pair'][0])
+                    sanitized_end = sanitize_node_name(row['pair'][1])
+                    dot.edge(sanitized_start, sanitized_end, label=str(row['frequency']))
                 st.graphviz_chart(dot)
                 
                 st.subheader("Footprint")
                 footprint = get_footprint(pairs)
                 st.dataframe(footprint)
                 
-                # Here you would add your alpha miner algorithm and Petri net visualization
+                # Placeholder for Alpha Miner algorithm and Petri Net visualization
                 st.info("Alpha Miner algorithm and Petri Net visualization would be implemented here.")
         else:
             st.warning("""
