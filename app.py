@@ -8,42 +8,67 @@ import plotly.graph_objects as go
 from pm4py.objects.log.importer.xes import importer as xes_importer
 from pm4py.objects.conversion.log import converter as log_converter
 from pm4py.algo.discovery.alpha import algorithm as alpha_miner
-from pm4py.algo.discovery.dfg import algorithm as dfg_discovery
-from pm4py.visualization.dfg import visualizer as dfg_visualization
+from pm4py.algo.discovery.inductive import algorithm as inductive_miner
+from pm4py.visualization.petri_net import visualizer as pn_visualizer
+from pm4py.algo.conformance.tokenreplay import algorithm as token_replay
+from pm4py.statistics.variants.log import get as variants_module
 from pm4py.statistics.traces.generic.log import case_statistics
-from pm4py.statistics.start_activities.log import get as start_activities
-from pm4py.statistics.end_activities.log import get as end_activities
 from pm4py.algo.filtering.log.variants import variants_filter
-from datetime import datetime
+from pm4py.algo.organizational_mining.roles import algorithm as roles_discovery
+from pm4py.algo.organizational_mining.sna import algorithm as sna
+from pm4py.statistics.traces.generic.log import case_arrival
+from pm4py.algo.filtering.log.attributes import attributes_filter
+from pm4py.util import constants
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
 import io
 
 # Set page config
-st.set_page_config(page_title="Process Mining App", layout="wide")
+st.set_page_config(page_title="Contact Center Process Mining App", layout="wide")
 
 # Sidebar
-st.sidebar.title("Process Mining App")
-uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type="csv")
+st.sidebar.title("Contact Center Process Mining")
+file_type = st.sidebar.selectbox("Select file type", ["CSV", "XES"])
+uploaded_file = st.sidebar.file_uploader(f"Choose a {file_type} file", type=file_type.lower())
 
 @st.cache_data
-def load_data(file):
-    df = pd.read_csv(file)
-    df['time:timestamp'] = pd.to_datetime(df['time:timestamp'])
+def load_data(file, file_type):
+    if file_type == "CSV":
+        df = pd.read_csv(file)
+    else:  # XES
+        event_log = xes_importer.apply(file)
+        df = log_converter.apply(event_log, variant=log_converter.Variants.TO_DATA_FRAME)
     return df
 
 if uploaded_file is not None:
-    df = load_data(uploaded_file)
+    df = load_data(uploaded_file, file_type)
+    
+    # Column selection
+    st.sidebar.header("Select Columns")
+    case_id_col = st.sidebar.selectbox("Case ID", df.columns)
+    activity_col = st.sidebar.selectbox("Activity", df.columns)
+    timestamp_col = st.sidebar.selectbox("Timestamp", df.columns)
+    resource_col = st.sidebar.selectbox("Resource", df.columns, index=None)
     
     # Convert to event log
+    df['case:concept:name'] = df[case_id_col]
+    df['concept:name'] = df[activity_col]
+    df['time:timestamp'] = pd.to_datetime(df[timestamp_col])
+    if resource_col:
+        df['org:resource'] = df[resource_col]
+    
     event_log = log_converter.apply(df)
 
     # Main content
-    st.title("Process Mining Dashboard")
+    st.title("Contact Center Process Mining Dashboard")
 
     # 1. Process Map Visualization
     st.header("1. Process Map Visualization")
     try:
-        dfg = dfg_discovery.apply(event_log)
-        gviz = dfg_visualization.apply(dfg, log=event_log, variant=dfg_visualization.Variants.FREQUENCY)
+        net, initial_marking, final_marking = alpha_miner.apply(event_log)
+        gviz = pn_visualizer.apply(net, initial_marking, final_marking)
         st.graphviz_chart(gviz)
     except Exception as e:
         st.error(f"An error occurred while generating the process map: {str(e)}")
@@ -62,9 +87,8 @@ if uploaded_file is not None:
     # 2. Variant Analysis
     st.header("2. Variant Analysis")
     try:
-        variants_count = variants_filter.get_variants(event_log)
-        variants_df = pd.DataFrame([(k, v) for k, v in variants_count.items()], columns=['Variant', 'Count'])
-        variants_df['Variant'] = variants_df['Variant'].apply(lambda x: '->'.join(x))
+        variants_count = variants_module.get_variants(event_log)
+        variants_df = pd.DataFrame([(str(k), v) for k, v in variants_count.items()], columns=['Variant', 'Count'])
         variants_df = variants_df.sort_values('Count', ascending=False).reset_index(drop=True)
         
         fig = px.bar(variants_df.head(10), x='Variant', y='Count', title='Top 10 Variants')
@@ -78,53 +102,42 @@ if uploaded_file is not None:
     # 3. Process Summary
     st.header("3. Process Summary")
     try:
-        num_cases = df['case:concept:name'].nunique()
-        num_events = len(df)
-        num_activities = df['concept:name'].nunique()
-        avg_case_duration = df.groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400).mean()
+        case_durations = df.groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400)
+        avg_duration = case_durations.mean()
+        median_duration = case_durations.median()
+        throughput_time = case_arrival.get_case_arrival_avg(event_log)
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Number of Cases", num_cases)
-        col2.metric("Number of Events", num_events)
-        col3.metric("Number of Activities", num_activities)
-        col4.metric("Avg Case Duration (days)", f"{avg_case_duration:.2f}")
-        
-        start_acts = start_activities.get_start_activities(event_log)
-        end_acts = end_activities.get_end_activities(event_log)
-        
-        st.write("Start Activities:", start_acts)
-        st.write("End Activities:", end_acts)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Average Case Duration", f"{avg_duration:.2f} days")
+        col2.metric("Median Case Duration", f"{median_duration:.2f} days")
+        col3.metric("Average Throughput Time", f"{throughput_time:.2f} days")
     except Exception as e:
         st.error(f"An error occurred while calculating process summary: {str(e)}")
         st.write("Unable to calculate detailed process summary.")
 
-    # 4. Performance Analysis
-    st.header("4. Performance Analysis")
+    # 4. Conformance Checking
+    st.header("4. Conformance Checking")
     try:
-        case_durations = df.groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400)
+        replayed_traces = token_replay.apply(event_log, net, initial_marking, final_marking)
+        conf_df = pd.DataFrame(replayed_traces)
         
-        fig = px.histogram(case_durations, nbins=20, labels={'value': 'Case Duration (days)'}, title='Case Duration Distribution')
-        st.plotly_chart(fig)
+        fitness = sum(conf_df['trace_fitness']) / len(conf_df)
+        st.metric("Overall Process Fitness", f"{fitness:.2%}")
         
-        activity_durations = df.groupby('concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400)
-        
-        fig = px.bar(x=activity_durations.index, y=activity_durations.values, 
-                     labels={'x': 'Activity', 'y': 'Average Duration (days)'}, title='Average Activity Duration')
+        fig = px.histogram(conf_df, x='trace_fitness', nbins=20, title='Trace Fitness Distribution')
         st.plotly_chart(fig)
     except Exception as e:
-        st.error(f"An error occurred during performance analysis: {str(e)}")
-        st.write("Unable to perform detailed performance analysis.")
+        st.error(f"An error occurred during conformance checking: {str(e)}")
+        st.write("Unable to perform conformance checking.")
 
     # 5. Social Network Analysis
     st.header("5. Social Network Analysis")
-    if 'org:resource' in df.columns:
+    if resource_col:
         try:
-            handover_df = df.sort_values(['case:concept:name', 'time:timestamp'])
-            handover_df['next_resource'] = handover_df.groupby('case:concept:name')['org:resource'].shift(-1)
-            handover_df = handover_df[handover_df['org:resource'] != handover_df['next_resource']]
-            handover_count = handover_df.groupby(['org:resource', 'next_resource']).size().reset_index(name='count')
+            hw_values = sna.apply(event_log, variant=sna.Variants.HANDOVER_LOG)
+            hw_df = pd.DataFrame([(k[0], k[1], v) for k, v in hw_values.items()], columns=['source', 'target', 'value'])
             
-            G = nx.from_pandas_edgelist(handover_count, 'org:resource', 'next_resource', 'count')
+            G = nx.from_pandas_edgelist(hw_df, 'source', 'target', 'value')
             pos = nx.spring_layout(G)
             
             edge_x = []
@@ -185,10 +198,64 @@ if uploaded_file is not None:
             st.error(f"An error occurred during social network analysis: {str(e)}")
             st.write("Unable to perform social network analysis.")
     else:
-        st.write("Resource column not found. Social Network Analysis is not available.")
+        st.write("Resource column not selected. Social Network Analysis is not available.")
 
-    # 6. Time-based Analysis
-    st.header("6. Time-based Analysis")
+    # 6. Performance Analysis
+    st.header("6. Performance Analysis")
+    try:
+        case_durations = df.groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400)
+        
+        fig = px.histogram(case_durations, nbins=20, labels={'value': 'Case Duration (days)'}, title='Case Duration Distribution')
+        st.plotly_chart(fig)
+        
+        activities = df['concept:name'].unique()
+        activity_durations = {act: df[df['concept:name'] == act].groupby('case:concept:name').apply(lambda x: (x['time:timestamp'].max() - x['time:timestamp'].min()).total_seconds() / 86400).mean() for act in activities}
+        
+        fig = px.bar(x=list(activity_durations.keys()), y=list(activity_durations.values()), 
+                     labels={'x': 'Activity', 'y': 'Average Duration (days)'}, title='Average Activity Duration')
+        st.plotly_chart(fig)
+    except Exception as e:
+        st.error(f"An error occurred during performance analysis: {str(e)}")
+        st.write("Unable to perform detailed performance analysis.")
+
+    # 7. Predictive Analytics
+    st.header("7. Predictive Analytics")
+    try:
+        df['case:concept:name'] = df['case:concept:name'].astype('category').cat.codes
+        df['concept:name'] = df['concept:name'].astype('category').cat.codes
+        if resource_col:
+            df['org:resource'] = df['org:resource'].astype('category').cat.codes
+            features = ['case:concept:name', 'concept:name', 'org:resource']
+        else:
+            features = ['case:concept:name', 'concept:name']
+        
+        target = 'time:timestamp'
+        
+        X = df[features]
+        y = (df[target] - df[target].min()).dt.total_seconds()
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
+        
+        y_pred = model.predict(X_test)
+        mse = np.mean((y_test - y_pred)**2)
+        rmse = np.sqrt(mse)
+        
+        st.metric("Root Mean Square Error (RMSE) for Prediction", f"{rmse:.2f} seconds")
+        
+        feature_importance = pd.DataFrame({'feature': features, 'importance': model.feature_importances_})
+        feature_importance = feature_importance.sort_values('importance', ascending=False)
+        
+        fig = px.bar(feature_importance, x='feature', y='importance', title='Feature Importance for Prediction')
+        st.plotly_chart(fig)
+    except Exception as e:
+        st.error(f"An error occurred during predictive analytics: {str(e)}")
+        st.write("Unable to perform predictive analytics.")
+
+    # 8. Time-based Analysis
+    st.header("8. Time-based Analysis")
     try:
         df['date'] = df['time:timestamp'].dt.date
         daily_cases = df.groupby('date')['case:concept:name'].nunique().reset_index()
@@ -200,8 +267,8 @@ if uploaded_file is not None:
         st.error(f"An error occurred during time-based analysis: {str(e)}")
         st.write("Unable to perform time-based analysis.")
     
-    # 7. Filtering and Drill-down Capabilities
-    st.header("7. Filtering and Drill-down Capabilities")
+    # 9. Filtering and Drill-down Capabilities
+    st.header("9. Filtering and Drill-down Capabilities")
     
     st.write("Select a date range to filter the data:")
     try:
@@ -220,7 +287,7 @@ if uploaded_file is not None:
         st.write("Unable to perform filtering and drill-down analysis.")
 
 else:
-    st.write("Please upload a CSV file to begin the analysis.")
+    st.write("Please upload a CSV or XES file to begin the analysis.")
 
 # Add download button for the processed data
 if 'df' in locals():
