@@ -1,3 +1,7 @@
-graphviz
-pandas
 streamlit
+pandas
+graphviz
+numpy
+python-dateutil
+pytz
+tzdata
